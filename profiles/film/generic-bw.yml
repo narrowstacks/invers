@@ -1,0 +1,39 @@
+# Generic Black & White Negative Film Preset
+# A starting point for any B&W negative film
+#
+# This preset provides basic inversion and tone mapping
+# suitable for most black and white negative films.
+
+name: "Generic Black & White"
+
+# Base offsets (R, G, B) - none, rely on base estimation
+# For B&W, all channels typically have similar base
+base_offsets: [0.0, 0.0, 0.0]
+
+# Color correction matrix (3x3)
+# Identity matrix - no color correction needed for B&W
+color_matrix:
+  - [1.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0]
+  - [0.0, 0.0, 1.0]
+
+# Tone curve parameters
+tone_curve:
+  curve_type: "s-curve"
+  strength: 0.6  # Moderate S-curve for classic B&W contrast
+  params: {}
+
+# Notes about this preset
+notes: |
+  Generic black & white negative preset for film conversion.
+
+  Suitable for most B&W negative films including:
+  - Kodak Tri-X, T-MAX, Plus-X
+  - Ilford HP5, FP4, Delta
+  - Fuji Neopan, Acros
+
+  The S-curve provides classic B&W contrast while preserving
+  highlight and shadow detail.
+
+  Usage:
+    positize convert input.tif --preset profiles/film/generic-bw.yml --auto

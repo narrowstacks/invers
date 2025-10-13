@@ -1,0 +1,38 @@
+# Fuji Superia 400 Film Preset
+# Color negative film preset optimized for Fuji Superia 400
+#
+# This preset provides color correction and tone mapping for
+# Fuji Superia 400, a consumer color negative film known for
+# its warm tones and good skin tone reproduction.
+
+name: "Fuji Superia 400"
+
+# Base offsets (R, G, B) - minimal since base estimation handles most of this
+base_offsets: [0.0, 0.0, 0.0]
+
+# Color correction matrix (3x3)
+# Corrects for the orange mask of color negatives
+# This matrix provides a mild warm cast typical of Superia 400
+color_matrix:
+  - [1.15, -0.05, -0.10]  # Red: slightly boost, reduce green/blue influence
+  - [-0.05, 1.10, -0.05]  # Green: slight boost, minimal cross-talk
+  - [-0.10, -0.10, 1.20]  # Blue: boost to counteract orange mask
+
+# Tone curve parameters
+tone_curve:
+  curve_type: "s-curve"
+  strength: 0.5  # Moderate S-curve for natural film-like contrast
+  params: {}
+
+# Notes about this preset
+notes: |
+  Fuji Superia 400 preset for color negative conversion.
+
+  Characteristics:
+  - Warm, pleasing color rendition
+  - Good skin tones
+  - Moderate contrast with smooth highlights
+  - Suitable for general photography
+
+  Usage:
+    positize convert input.tif --preset profiles/film/fuji-superia-400.yml --roi x,y,w,h
