@@ -57,6 +57,23 @@ pub fn process_image(
                   stats.0, stats.1, stats.2);
     }
 
+    // Step 3.1: Apply film-specific base offsets if available
+    // These compensate for color negative orange mask characteristics
+    if let Some(preset) = &options.film_preset {
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] += preset.base_offsets[0];
+            pixel[1] += preset.base_offsets[1];
+            pixel[2] += preset.base_offsets[2];
+        }
+
+        if options.debug {
+            let stats = compute_stats(&data);
+            eprintln!("[DEBUG] After base offsets [{:.3}, {:.3}, {:.3}] - min: {:.6}, max: {:.6}, mean: {:.6}",
+                      preset.base_offsets[0], preset.base_offsets[1], preset.base_offsets[2],
+                      stats.0, stats.1, stats.2);
+        }
+    }
+
     // Step 3.5: Apply exposure compensation if requested
     if (options.exposure_compensation - 1.0).abs() > 0.001 {
         for value in data.iter_mut() {
@@ -70,7 +87,23 @@ pub fn process_image(
         }
     }
 
-    // Step 4: Apply tone curve (unless skipped)
+    // Step 4: Apply color correction matrix (unless skipped)
+    // Apply color matrix BEFORE tone curve to correct film dye characteristics in linear space
+    if !options.skip_color_matrix {
+        if let Some(preset) = &options.film_preset {
+            apply_color_matrix(&mut data, &preset.color_matrix, channels);
+
+            if options.debug {
+                let stats = compute_stats(&data);
+                eprintln!("[DEBUG] After color matrix - min: {:.6}, max: {:.6}, mean: {:.6}",
+                          stats.0, stats.1, stats.2);
+            }
+        }
+    } else if options.debug {
+        eprintln!("[DEBUG] Color matrix skipped");
+    }
+
+    // Step 5: Apply tone curve (unless skipped)
     if !options.skip_tone_curve {
         if let Some(preset) = &options.film_preset {
             apply_tone_curve(&mut data, &preset.tone_curve);
@@ -87,21 +120,6 @@ pub fn process_image(
         }
     } else if options.debug {
         eprintln!("[DEBUG] Tone curve skipped");
-    }
-
-    // Step 5: Apply color correction matrix (unless skipped)
-    if !options.skip_color_matrix {
-        if let Some(preset) = &options.film_preset {
-            apply_color_matrix(&mut data, &preset.color_matrix, channels);
-
-            if options.debug {
-                let stats = compute_stats(&data);
-                eprintln!("[DEBUG] After color matrix - min: {:.6}, max: {:.6}, mean: {:.6}",
-                          stats.0, stats.1, stats.2);
-            }
-        }
-    } else if options.debug {
-        eprintln!("[DEBUG] Color matrix skipped");
     }
 
     // Step 6: Colorspace transform (for now, keep in same space)
@@ -144,11 +162,22 @@ pub fn estimate_base(
     // Extract ROI pixels
     let roi_pixels = extract_roi_pixels(image, x, y, width, height);
 
-    // Compute per-channel medians
-    let medians = compute_channel_medians(&roi_pixels);
+    // Compute per-channel medians from the BRIGHTEST pixels in ROI
+    // For color negatives, the film base is the clearest (brightest) area
+    // Taking top 10% of pixels avoids contamination from image content
+    let num_brightest = ((roi_pixels.len() as f32 * 0.10).ceil() as usize).max(10);
+    let percentage = (num_brightest as f32 / roi_pixels.len() as f32 * 100.0).round();
+
+    eprintln!("[BASE] ROI: {} total pixels, using {} brightest ({}%)",
+              roi_pixels.len(), num_brightest, percentage);
+
+    let medians = compute_channel_medians_from_brightest(&roi_pixels, num_brightest);
 
     // Calculate noise statistics (standard deviation per channel)
     let noise_stats = compute_noise_stats(&roi_pixels, &medians);
+
+    eprintln!("[BASE] Detected base RGB: [{:.6}, {:.6}, {:.6}]",
+              medians[0], medians[1], medians[2]);
 
     Ok(BaseEstimation {
         roi: Some(roi_rect),
@@ -183,15 +212,33 @@ fn extract_roi_pixels(
     pixels
 }
 
-/// Compute per-channel medians
-fn compute_channel_medians(pixels: &[[f32; 3]]) -> [f32; 3] {
+/// Compute per-channel medians from the brightest N pixels
+/// This samples the clearest film base without image content
+fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize) -> [f32; 3] {
     if pixels.is_empty() {
         return [0.0, 0.0, 0.0];
     }
 
-    let mut r_values: Vec<f32> = pixels.iter().map(|p| p[0]).collect();
-    let mut g_values: Vec<f32> = pixels.iter().map(|p| p[1]).collect();
-    let mut b_values: Vec<f32> = pixels.iter().map(|p| p[2]).collect();
+    // Create a vec of (brightness, pixel) tuples
+    let mut brightness_pixels: Vec<(f32, [f32; 3])> = pixels
+        .iter()
+        .map(|p| {
+            let brightness = p[0] + p[1] + p[2]; // Sum of RGB as brightness
+            (brightness, *p)
+        })
+        .collect();
+
+    // Sort by brightness (descending - brightest first)
+    brightness_pixels.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Take the top N brightest pixels (or all if fewer than N)
+    let n = num_pixels.min(brightness_pixels.len());
+    let brightest: Vec<[f32; 3]> = brightness_pixels[..n].iter().map(|(_, p)| *p).collect();
+
+    // Compute median for each channel from these brightest pixels
+    let mut r_values: Vec<f32> = brightest.iter().map(|p| p[0]).collect();
+    let mut g_values: Vec<f32> = brightest.iter().map(|p| p[1]).collect();
+    let mut b_values: Vec<f32> = brightest.iter().map(|p| p[2]).collect();
 
     [
         compute_median(&mut r_values),
@@ -281,21 +328,28 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
 
     // Find brightest region
     let regions = [
-        (top_brightness, (border_width, 0, image.width - 2 * border_width, border_height)),
-        (bottom_brightness, (border_width, image.height.saturating_sub(border_height), image.width - 2 * border_width, border_height)),
-        (left_brightness, (0, border_height, border_width, image.height - 2 * border_height)),
-        (right_brightness, (image.width.saturating_sub(border_width), border_height, border_width, image.height - 2 * border_height)),
+        (top_brightness, (border_width, 0, image.width - 2 * border_width, border_height), "top"),
+        (bottom_brightness, (border_width, image.height.saturating_sub(border_height), image.width - 2 * border_width, border_height), "bottom"),
+        (left_brightness, (0, border_height, border_width, image.height - 2 * border_height), "left"),
+        (right_brightness, (image.width.saturating_sub(border_width), border_height, border_width, image.height - 2 * border_height), "right"),
     ];
 
-    let (_, roi) = regions
+    eprintln!("[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
+              top_brightness, bottom_brightness, left_brightness, right_brightness);
+
+    let (brightness, roi, location) = regions
         .iter()
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .ok_or("Failed to determine auto ROI".to_string())?;
 
+    eprintln!("[BASE] Selected {} border (brightness={:.4}) as ROI", location, brightness);
+
     Ok(*roi)
 }
 
-/// Sample the average brightness of a region
+/// Sample the average brightness of a region with color-aware weighting
+/// For color negatives, film base is orange (high R+G, lower B)
+/// Weight channels to detect orange mask: 0.5*R + 0.4*G + 0.1*B
 fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> f32 {
     let x_end = (x + width).min(image.width);
     let y_end = (y + height).min(image.height);
@@ -307,9 +361,13 @@ fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, he
         for col in x..x_end {
             let pixel_idx = ((row * image.width + col) * 3) as usize;
             if pixel_idx + 2 < image.data.len() {
-                // Average RGB values for brightness
-                sum += image.data[pixel_idx] + image.data[pixel_idx + 1] + image.data[pixel_idx + 2];
-                count += 3;
+                let r = image.data[pixel_idx];
+                let g = image.data[pixel_idx + 1];
+                let b = image.data[pixel_idx + 2];
+
+                // Weight for orange mask detection (prioritizes R+G over B)
+                sum += 0.5 * r + 0.4 * g + 0.1 * b;
+                count += 1;
             }
         }
     }
@@ -338,39 +396,37 @@ pub fn invert_negative(
         ));
     }
 
-    let base_r = base.medians[0];
-    let base_g = base.medians[1];
-    let base_b = base.medians[2];
+    let base_r = base.medians[0].max(0.0001);
+    let base_g = base.medians[1].max(0.0001);
+    let base_b = base.medians[2].max(0.0001);
 
-    // Invert using base-normalized subtraction with shadow lift
-    // Per-channel normalization handles orange mask correctly
-    // Shadow lift prevents pure black and preserves shadow detail
-    //
-    // Formula: ((base - pixel) / base) + lift
-    // - Clear film (pixel=0) → (base / base) + lift = 1.0 + lift (bright, but not max)
-    // - Film base (pixel=base) → (0 / base) + lift = lift (near black but preserves detail)
-    // - Dense film (pixel>base) → negative + lift (may be < lift)
-
-    let base_r = base_r.max(0.0001);
-    let base_g = base_g.max(0.0001);
-    let base_b = base_b.max(0.0001);
-
-    //Scale and shift to preserve information in a smaller range
-    // Instead of using full [0, 1], map to approximately [0.15, 0.85]
-    // This prevents both shadow crushing (min > 0) and highlight clipping (max < 1)
-    let scale = 0.7; // Scale factor to prevent highlight clipping
-    let lift = 0.15; // Shadow lift to preserve shadow detail
-
+    // Invert using proper density-based math
+    // Formula: positive = (base - negative) / base
+    // This is equivalent to: positive = 1 - (negative / base)
+    // Maintains correct color relationships and density proportions
     for pixel in data.chunks_exact_mut(3) {
-        // Compute relative density, scale down, and lift shadows
-        // Formula: (base - pixel) / base * scale + lift
-        let r = ((base_r - pixel[0]) / base_r) * scale + lift;
-        let g = ((base_g - pixel[1]) / base_g) * scale + lift;
-        let b = ((base_b - pixel[2]) / base_b) * scale + lift;
+        pixel[0] = (base_r - pixel[0]) / base_r;
+        pixel[1] = (base_g - pixel[1]) / base_g;
+        pixel[2] = (base_b - pixel[2]) / base_b;
+    }
 
-        pixel[0] = r.clamp(0.0, 1.0);
-        pixel[1] = g.clamp(0.0, 1.0);
-        pixel[2] = b.clamp(0.0, 1.0);
+    // Find the minimum value across all channels
+    let mut min_value = f32::MAX;
+    for &value in data.iter() {
+        min_value = min_value.min(value);
+    }
+
+    // Calculate minimal shadow lift if needed
+    // With proper base detection and math, this should be minimal
+    let shadow_lift = if min_value < 0.0 {
+        -min_value + 0.02 // Small lift to prevent clipping
+    } else {
+        0.0 // No lift needed if all values positive
+    };
+
+    // Apply uniform shadow lift
+    for value in data.iter_mut() {
+        *value += shadow_lift;
     }
 
     Ok(())

@@ -5,7 +5,7 @@
 use std::path::Path;
 
 /// Decoded image data
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedImage {
     /// Image width in pixels
     pub width: u32,
