@@ -8,31 +8,28 @@ use std::path::Path;
 /// Load a film preset from a YAML file
 pub fn load_film_preset<P: AsRef<Path>>(path: P) -> Result<FilmPreset, String> {
     let path = path.as_ref();
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read preset file: {}", e))?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read preset file: {}", e))?;
 
-    serde_yaml::from_str(&contents)
-        .map_err(|e| format!("Failed to parse preset YAML: {}", e))
+    serde_yaml::from_str(&contents).map_err(|e| format!("Failed to parse preset YAML: {}", e))
 }
 
 /// Save a film preset to a YAML file
 pub fn save_film_preset<P: AsRef<Path>>(preset: &FilmPreset, path: P) -> Result<(), String> {
     let path = path.as_ref();
-    let yaml = serde_yaml::to_string(preset)
-        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    let yaml =
+        serde_yaml::to_string(preset).map_err(|e| format!("Failed to serialize preset: {}", e))?;
 
-    std::fs::write(path, yaml)
-        .map_err(|e| format!("Failed to write preset file: {}", e))
+    std::fs::write(path, yaml).map_err(|e| format!("Failed to write preset file: {}", e))
 }
 
 /// Load a scan profile from a YAML file
 pub fn load_scan_profile<P: AsRef<Path>>(path: P) -> Result<ScanProfile, String> {
     let path = path.as_ref();
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read profile file: {}", e))?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read profile file: {}", e))?;
 
-    serde_yaml::from_str(&contents)
-        .map_err(|e| format!("Failed to parse profile YAML: {}", e))
+    serde_yaml::from_str(&contents).map_err(|e| format!("Failed to parse profile YAML: {}", e))
 }
 
 /// Save a scan profile to a YAML file
@@ -41,8 +38,7 @@ pub fn save_scan_profile<P: AsRef<Path>>(profile: &ScanProfile, path: P) -> Resu
     let yaml = serde_yaml::to_string(profile)
         .map_err(|e| format!("Failed to serialize profile: {}", e))?;
 
-    std::fs::write(path, yaml)
-        .map_err(|e| format!("Failed to write profile file: {}", e))
+    std::fs::write(path, yaml).map_err(|e| format!("Failed to write profile file: {}", e))
 }
 
 /// List all available film presets in a directory
@@ -50,8 +46,8 @@ pub fn list_film_presets<P: AsRef<Path>>(dir: P) -> Result<Vec<String>, String> 
     let dir = dir.as_ref();
     let mut presets = Vec::new();
 
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read presets directory: {}", e))?;
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("Failed to read presets directory: {}", e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
@@ -71,8 +67,8 @@ pub fn list_film_presets<P: AsRef<Path>>(dir: P) -> Result<Vec<String>, String> 
 
 /// Get the default presets directory
 pub fn get_presets_dir() -> Result<std::path::PathBuf, String> {
-    let config_dir = dirs::config_dir()
-        .ok_or_else(|| "Could not determine config directory".to_string())?;
+    let config_dir =
+        dirs::config_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
 
     let presets_dir = config_dir.join("positize").join("presets");
 

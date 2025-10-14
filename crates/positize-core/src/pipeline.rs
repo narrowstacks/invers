@@ -5,6 +5,10 @@
 use crate::decoders::DecodedImage;
 use crate::models::{BaseEstimation, ConvertOptions};
 
+/// Prevent values from ever hitting absolute black/white while retaining full range.
+const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
+const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
+
 /// Result of the processing pipeline
 pub struct ProcessedImage {
     /// Image width
@@ -38,23 +42,50 @@ pub fn process_image(
         }
     };
 
-    // Step 2: Clone image data for processing (we'll modify it in-place)
-    let mut data = image.data.clone();
-    let width = image.width;
-    let height = image.height;
-    let channels = image.channels;
+    // Step 2: Move image data for processing (avoid an extra allocation)
+    let DecodedImage {
+        width,
+        height,
+        channels,
+        mut data,
+        ..
+    } = image;
 
     if channels != 3 {
         return Err(format!("Pipeline requires 3-channel RGB, got {}", channels));
     }
 
     // Step 3: Base subtraction and inversion
-    invert_negative(&mut data, &base_estimation, channels)?;
+    invert_negative(&mut data, &base_estimation, channels, &options)?;
 
     if options.debug {
         let stats = compute_stats(&data);
-        eprintln!("[DEBUG] After inversion - min: {:.6}, max: {:.6}, mean: {:.6}",
-                  stats.0, stats.1, stats.2);
+        eprintln!(
+            "[DEBUG] After inversion - min: {:.6}, max: {:.6}, mean: {:.6}",
+            stats.0, stats.1, stats.2
+        );
+    }
+
+    // Step 3.05: Apply auto-levels (histogram stretching) - CRITICAL FOR MATCHING PHOTOSHOP
+    // This is the key missing step that makes images 30% darker
+    if options.enable_auto_levels {
+        let params =
+            crate::auto_adjust::auto_levels(&mut data, channels, options.auto_levels_clip_percent);
+
+        if options.debug {
+            eprintln!(
+                "[DEBUG] After auto-levels (clip={:.1}%) - R:[{:.4}-{:.4}], G:[{:.4}-{:.4}], B:[{:.4}-{:.4}]",
+                options.auto_levels_clip_percent,
+                params[0], params[1], params[2], params[3], params[4], params[5]
+            );
+            let stats = compute_stats(&data);
+            eprintln!(
+                "[DEBUG]   min: {:.6}, max: {:.6}, mean: {:.6}",
+                stats.0, stats.1, stats.2
+            );
+        }
+    } else if options.debug {
+        eprintln!("[DEBUG] Auto-levels skipped");
     }
 
     // Step 3.1: Apply film-specific base offsets if available
@@ -74,16 +105,40 @@ pub fn process_image(
         }
     }
 
+    // Step 3.2: Apply auto-color (neutralize color casts)
+    if options.enable_auto_color {
+        let adjustments =
+            crate::auto_adjust::auto_color(&mut data, channels, options.auto_color_strength);
+
+        if options.debug {
+            eprintln!(
+                "[DEBUG] After auto-color (strength={:.2}) - adjustments: R={:.4}, G={:.4}, B={:.4}",
+                options.auto_color_strength,
+                adjustments[0], adjustments[1], adjustments[2]
+            );
+            let stats = compute_stats(&data);
+            eprintln!(
+                "[DEBUG]   min: {:.6}, max: {:.6}, mean: {:.6}",
+                stats.0, stats.1, stats.2
+            );
+        }
+    } else if options.debug {
+        eprintln!("[DEBUG] Auto-color skipped");
+    }
+
     // Step 3.5: Apply exposure compensation if requested
     if (options.exposure_compensation - 1.0).abs() > 0.001 {
         for value in data.iter_mut() {
-            *value = (*value * options.exposure_compensation).clamp(0.0, 1.0);
+            let scaled = *value * options.exposure_compensation;
+            *value = clamp_to_working_range(scaled);
         }
 
         if options.debug {
             let stats = compute_stats(&data);
-            eprintln!("[DEBUG] After exposure {:.2}x - min: {:.6}, max: {:.6}, mean: {:.6}",
-                      options.exposure_compensation, stats.0, stats.1, stats.2);
+            eprintln!(
+                "[DEBUG] After exposure {:.2}x - min: {:.6}, max: {:.6}, mean: {:.6}",
+                options.exposure_compensation, stats.0, stats.1, stats.2
+            );
         }
     }
 
@@ -95,8 +150,10 @@ pub fn process_image(
 
             if options.debug {
                 let stats = compute_stats(&data);
-                eprintln!("[DEBUG] After color matrix - min: {:.6}, max: {:.6}, mean: {:.6}",
-                          stats.0, stats.1, stats.2);
+                eprintln!(
+                    "[DEBUG] After color matrix - min: {:.6}, max: {:.6}, mean: {:.6}",
+                    stats.0, stats.1, stats.2
+                );
             }
         }
     } else if options.debug {
@@ -115,8 +172,10 @@ pub fn process_image(
 
         if options.debug {
             let stats = compute_stats(&data);
-            eprintln!("[DEBUG] After tone curve - min: {:.6}, max: {:.6}, mean: {:.6}",
-                      stats.0, stats.1, stats.2);
+            eprintln!(
+                "[DEBUG] After tone curve - min: {:.6}, max: {:.6}, mean: {:.6}",
+                stats.0, stats.1, stats.2
+            );
         }
     } else if options.debug {
         eprintln!("[DEBUG] Tone curve skipped");
@@ -124,6 +183,9 @@ pub fn process_image(
 
     // Step 6: Colorspace transform (for now, keep in same space)
     // TODO: Implement colorspace transforms in M3
+
+    // Final guard: keep values within photographic working range
+    enforce_working_range(&mut data);
 
     // Return processed image
     Ok(ProcessedImage {
@@ -168,16 +230,22 @@ pub fn estimate_base(
     let num_brightest = ((roi_pixels.len() as f32 * 0.10).ceil() as usize).max(10);
     let percentage = (num_brightest as f32 / roi_pixels.len() as f32 * 100.0).round();
 
-    eprintln!("[BASE] ROI: {} total pixels, using {} brightest ({}%)",
-              roi_pixels.len(), num_brightest, percentage);
+    eprintln!(
+        "[BASE] ROI: {} total pixels, using {} brightest ({}%)",
+        roi_pixels.len(),
+        num_brightest,
+        percentage
+    );
 
     let medians = compute_channel_medians_from_brightest(&roi_pixels, num_brightest);
 
     // Calculate noise statistics (standard deviation per channel)
     let noise_stats = compute_noise_stats(&roi_pixels, &medians);
 
-    eprintln!("[BASE] Detected base RGB: [{:.6}, {:.6}, {:.6}]",
-              medians[0], medians[1], medians[2]);
+    eprintln!(
+        "[BASE] Detected base RGB: [{:.6}, {:.6}, {:.6}]",
+        medians[0], medians[1], medians[2]
+    );
 
     Ok(BaseEstimation {
         roi: Some(roi_rect),
@@ -328,21 +396,62 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
 
     // Find brightest region
     let regions = [
-        (top_brightness, (border_width, 0, image.width - 2 * border_width, border_height), "top"),
-        (bottom_brightness, (border_width, image.height.saturating_sub(border_height), image.width - 2 * border_width, border_height), "bottom"),
-        (left_brightness, (0, border_height, border_width, image.height - 2 * border_height), "left"),
-        (right_brightness, (image.width.saturating_sub(border_width), border_height, border_width, image.height - 2 * border_height), "right"),
+        (
+            top_brightness,
+            (
+                border_width,
+                0,
+                image.width - 2 * border_width,
+                border_height,
+            ),
+            "top",
+        ),
+        (
+            bottom_brightness,
+            (
+                border_width,
+                image.height.saturating_sub(border_height),
+                image.width - 2 * border_width,
+                border_height,
+            ),
+            "bottom",
+        ),
+        (
+            left_brightness,
+            (
+                0,
+                border_height,
+                border_width,
+                image.height - 2 * border_height,
+            ),
+            "left",
+        ),
+        (
+            right_brightness,
+            (
+                image.width.saturating_sub(border_width),
+                border_height,
+                border_width,
+                image.height - 2 * border_height,
+            ),
+            "right",
+        ),
     ];
 
-    eprintln!("[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
-              top_brightness, bottom_brightness, left_brightness, right_brightness);
+    eprintln!(
+        "[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
+        top_brightness, bottom_brightness, left_brightness, right_brightness
+    );
 
     let (brightness, roi, location) = regions
         .iter()
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .ok_or("Failed to determine auto ROI".to_string())?;
 
-    eprintln!("[BASE] Selected {} border (brightness={:.4}) as ROI", location, brightness);
+    eprintln!(
+        "[BASE] Selected {} border (brightness={:.4}) as ROI",
+        location, brightness
+    );
 
     Ok(*roi)
 }
@@ -384,6 +493,7 @@ pub fn invert_negative(
     data: &mut [f32],
     base: &BaseEstimation,
     channels: u8,
+    options: &crate::models::ConvertOptions,
 ) -> Result<(), String> {
     if channels != 3 {
         return Err(format!("Expected 3 channels, got {}", channels));
@@ -400,33 +510,89 @@ pub fn invert_negative(
     let base_g = base.medians[1].max(0.0001);
     let base_b = base.medians[2].max(0.0001);
 
-    // Invert using proper density-based math
-    // Formula: positive = (base - negative) / base
-    // This is equivalent to: positive = 1 - (negative / base)
-    // Maintains correct color relationships and density proportions
-    for pixel in data.chunks_exact_mut(3) {
-        pixel[0] = (base_r - pixel[0]) / base_r;
-        pixel[1] = (base_g - pixel[1]) / base_g;
-        pixel[2] = (base_b - pixel[2]) / base_b;
+    // Apply inversion based on mode
+    match options.inversion_mode {
+        crate::models::InversionMode::Linear => {
+            // Linear inversion: positive = (base - negative) / base
+            for pixel in data.chunks_exact_mut(3) {
+                pixel[0] = (base_r - pixel[0]) / base_r;
+                pixel[1] = (base_g - pixel[1]) / base_g;
+                pixel[2] = (base_b - pixel[2]) / base_b;
+            }
+        }
+        crate::models::InversionMode::Logarithmic => {
+            // Logarithmic (density-based) inversion
+            // positive = 10^(log10(base) - log10(negative))
+            let log_base_r = base_r.log10();
+            let log_base_g = base_g.log10();
+            let log_base_b = base_b.log10();
+
+            for pixel in data.chunks_exact_mut(3) {
+                let neg_r = pixel[0].max(0.0001);
+                let neg_g = pixel[1].max(0.0001);
+                let neg_b = pixel[2].max(0.0001);
+
+                pixel[0] = 10f32.powf(log_base_r - neg_r.log10()).clamp(0.0, 10.0);
+                pixel[1] = 10f32.powf(log_base_g - neg_g.log10()).clamp(0.0, 10.0);
+                pixel[2] = 10f32.powf(log_base_b - neg_b.log10()).clamp(0.0, 10.0);
+            }
+        }
     }
 
-    // Find the minimum value across all channels
-    let mut min_value = f32::MAX;
-    for &value in data.iter() {
-        min_value = min_value.min(value);
+    // Apply shadow lift based on mode
+    match options.shadow_lift_mode {
+        crate::models::ShadowLiftMode::Fixed => {
+            // Find minimum value to see if lift is needed
+            let mut min_value = f32::MAX;
+            for &value in data.iter() {
+                min_value = min_value.min(value);
+            }
+
+            let shadow_lift = if min_value < 0.0 {
+                -min_value + options.shadow_lift_value
+            } else {
+                options.shadow_lift_value
+            };
+
+            // Apply uniform lift
+            for value in data.iter_mut() {
+                *value += shadow_lift;
+            }
+
+            if options.debug {
+                eprintln!("[DEBUG] Fixed shadow lift: {:.6}", shadow_lift);
+            }
+        }
+        crate::models::ShadowLiftMode::Percentile => {
+            // Use adaptive shadow lift based on 1st percentile
+            let lift = crate::auto_adjust::adaptive_shadow_lift(
+                data,
+                options.shadow_lift_value,
+                1.0, // 1st percentile
+            );
+
+            if options.debug {
+                eprintln!("[DEBUG] Percentile shadow lift: {:.6}", lift);
+            }
+        }
+        crate::models::ShadowLiftMode::None => {
+            // No shadow lift, but clamp negatives to zero
+            for value in data.iter_mut() {
+                *value = value.max(0.0);
+            }
+        }
     }
 
-    // Calculate minimal shadow lift if needed
-    // With proper base detection and math, this should be minimal
-    let shadow_lift = if min_value < 0.0 {
-        -min_value + 0.02 // Small lift to prevent clipping
-    } else {
-        0.0 // No lift needed if all values positive
-    };
+    // Apply highlight compression if enabled
+    if options.highlight_compression < 1.0 {
+        crate::auto_adjust::compress_highlights(data, 0.9, options.highlight_compression);
 
-    // Apply uniform shadow lift
-    for value in data.iter_mut() {
-        *value += shadow_lift;
+        if options.debug {
+            eprintln!(
+                "[DEBUG] Highlight compression: {:.2}",
+                options.highlight_compression
+            );
+        }
     }
 
     Ok(())
@@ -498,7 +664,7 @@ fn apply_s_curve_point(x: f32, strength: f32) -> f32 {
     // Blend between original linear value and S-curve
     let result = x * (1.0 - strength) + adjusted * strength;
 
-    result.clamp(0.0, 1.0)
+    clamp_to_working_range(result)
 }
 
 /// Apply color correction matrix
@@ -519,9 +685,27 @@ pub fn apply_color_matrix(data: &mut [f32], matrix: &[[f32; 3]; 3], channels: u8
         // [G']   [m10 m11 m12] [G]
         // [B']   [m20 m21 m22] [B]
 
-        pixel[0] = (matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b).clamp(0.0, 1.0);
-        pixel[1] = (matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b).clamp(0.0, 1.0);
-        pixel[2] = (matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b).clamp(0.0, 1.0);
+        pixel[0] = clamp_to_working_range(matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b);
+        pixel[1] = clamp_to_working_range(matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b);
+        pixel[2] = clamp_to_working_range(matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b);
+    }
+}
+
+/// Clamp all values into the working range to avoid clipped blacks or whites.
+fn enforce_working_range(data: &mut [f32]) {
+    for value in data.iter_mut() {
+        *value = clamp_to_working_range(*value);
+    }
+}
+
+#[inline]
+fn clamp_to_working_range(value: f32) -> f32 {
+    if value <= WORKING_RANGE_FLOOR {
+        WORKING_RANGE_FLOOR
+    } else if value >= WORKING_RANGE_CEILING {
+        WORKING_RANGE_CEILING
+    } else {
+        value
     }
 }
 

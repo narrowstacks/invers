@@ -1,0 +1,53 @@
+# Dark Base Color Negative Preset
+# Optimized for film with darker orange/brown base (RGB base ~0.2-0.5)
+#
+# This preset is ideal for:
+# - Properly exposed color negatives
+# - Film stocks with moderate to heavy orange mask
+# - Scans with good density range
+#
+# Test results:
+# - raw0359: Score 0.0778, Base [0.500, 0.306, 0.229]
+# - raw0003: Score 0.0535, Base [0.498, 0.271, 0.204]
+
+name: "Dark Base Color Negative"
+
+# Base offsets (R, G, B) - rely on automatic base estimation
+base_offsets: [0.0, 0.0, 0.0]
+
+# Color correction matrix (3x3)
+# Balanced for darker orange masks with good color separation
+color_matrix:
+  - [1.08, -0.01, -0.07]  # Red: moderate boost
+  - [-0.01, 1.04, -0.03]  # Green: minimal adjustment
+  - [-0.07, -0.03, 1.12]  # Blue: boost for orange mask
+
+# Tone curve parameters
+tone_curve:
+  curve_type: "s-curve"
+  strength: 0.55  # Moderate S-curve for natural contrast
+  params: {}
+
+# Notes about this preset
+notes: |
+  Optimized for color negatives with dark/moderate film base.
+
+  RECOMMENDED SETTINGS:
+  - enable_auto_levels: true
+  - auto_levels_clip_percent: 1.0
+  - enable_auto_color: false (auto-levels handles this)
+  - base_brightest_percent: 10.0
+  - base_sampling_mode: Median
+  - tone_curve_strength: 0.5-0.7
+
+  CHARACTERISTICS:
+  - Film base RGB typically 0.2-0.5 range
+  - Strong orange mask present
+  - Good shadow detail retention
+  - Consistent exposure across frame
+
+  USAGE:
+    positize convert input.tif --preset profiles/film/dark-base-negative.yml
+
+  This preset produces excellent results (score < 0.1) on properly exposed
+  negatives with substantial film base density.

@@ -1,0 +1,72 @@
+# Manual Base Color Negative Preset
+# For negatives where automatic base detection fails
+#
+# This preset is designed for:
+# - Severely overexposed negatives
+# - Scans with no clear film base visible
+# - Images with clipped or near-white base detection
+# - Cases where auto base RGB approaches [1.0, 1.0, 1.0]
+#
+# Test results:
+# - raw0017: Score 1.6046, Base [1.000, 1.000, 1.000] (FAILED)
+# Auto-detection clipped at white - manual ROI required
+
+name: "Manual Base (Failed Auto-Detection)"
+
+# Base offsets (R, G, B) - will be overridden by manual base estimation
+base_offsets: [0.0, 0.0, 0.0]
+
+# Color correction matrix (3x3)
+# Conservative adjustments since base color is uncertain
+color_matrix:
+  - [1.06, 0.00, -0.06]  # Red: gentle boost
+  - [0.00, 1.04, -0.02]  # Green: minimal adjustment
+  - [-0.06, -0.02, 1.10]  # Blue: moderate boost
+
+# Tone curve parameters
+tone_curve:
+  curve_type: "s-curve"
+  strength: 0.45  # Moderate curve, adjustable based on results
+  params: {}
+
+# Notes about this preset
+notes: |
+  For negatives where automatic base detection fails or produces
+  invalid results (base RGB at or near [1.0, 1.0, 1.0]).
+
+  ⚠ CRITICAL: This preset REQUIRES manual base ROI specification!
+
+  SYMPTOMS OF FAILED AUTO-DETECTION:
+  - Base RGB values all > 0.95
+  - Base RGB = [0.999, 0.999, 0.999] or [1.0, 1.0, 1.0]
+  - Resulting images are extremely dark (exposure ratio < 0.8)
+  - Severe color shifts (-0.2 to -0.3 per channel)
+  - Overall test score > 1.0
+
+  REQUIRED WORKFLOW:
+  1. Analyze the negative to find a clear film base area:
+     positize analyze-base input.tif --auto
+
+  2. If auto-detection fails, manually specify ROI with clear base:
+     positize analyze-base input.tif --roi "x,y,width,height"
+
+  3. Convert using the manually determined base:
+     positize convert input.tif --preset profiles/film/manual-base-negative.yml \
+       --roi "x,y,width,height"
+
+  RECOMMENDED SETTINGS:
+  - Manual ROI selection (REQUIRED)
+  - enable_auto_levels: true
+  - auto_levels_clip_percent: 1.0-2.0
+  - enable_auto_color: false
+  - base_brightest_percent: 5.0-10.0 (within ROI)
+  - base_sampling_mode: Median
+
+  COMMON CAUSES:
+  - Severe overexposure (no clear film base in scan)
+  - Cropped scans with no border visible
+  - Extremely thin negatives
+  - Scanner clipping/auto-exposure issues
+
+  TIP: Look for film borders, sprocket holes, or areas between frames
+  that show clear, unexposed film base.

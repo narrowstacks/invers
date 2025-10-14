@@ -32,8 +32,8 @@ pub fn export_tiff16<P: AsRef<Path>>(
         .collect();
 
     // Create output file
-    let file = File::create(path.as_ref())
-        .map_err(|e| format!("Failed to create TIFF file: {}", e))?;
+    let file =
+        File::create(path.as_ref()).map_err(|e| format!("Failed to create TIFF file: {}", e))?;
     let writer = BufWriter::new(file);
 
     // Create TIFF encoder
@@ -42,11 +42,7 @@ pub fn export_tiff16<P: AsRef<Path>>(
 
     // Write the image as 16-bit RGB
     encoder
-        .write_image::<tiff::encoder::colortype::RGB16>(
-            image.width,
-            image.height,
-            &u16_data,
-        )
+        .write_image::<tiff::encoder::colortype::RGB16>(image.width, image.height, &u16_data)
         .map_err(|e| format!("Failed to write TIFF image: {}", e))?;
 
     // TODO: Embed ICC profile if provided

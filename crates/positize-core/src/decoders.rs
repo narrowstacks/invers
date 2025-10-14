@@ -52,28 +52,28 @@ fn decode_tiff<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     use std::fs::File;
     use std::io::BufReader;
 
-    let file = File::open(path.as_ref())
-        .map_err(|e| format!("Failed to open TIFF file: {}", e))?;
+    let file = File::open(path.as_ref()).map_err(|e| format!("Failed to open TIFF file: {}", e))?;
     let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
         .map_err(|e| format!("Failed to create TIFF decoder: {}", e))?;
 
     // Get image dimensions
-    let (width, height) = decoder.dimensions()
+    let (width, height) = decoder
+        .dimensions()
         .map_err(|e| format!("Failed to get TIFF dimensions: {}", e))?;
 
     // Get color type
-    let color_type = decoder.colortype()
+    let color_type = decoder
+        .colortype()
         .map_err(|e| format!("Failed to get TIFF color type: {}", e))?;
 
     // Read the image data
-    let image_data = decoder.read_image()
+    let image_data = decoder
+        .read_image()
         .map_err(|e| format!("Failed to read TIFF image data: {}", e))?;
 
     // Convert to f32 linear RGB based on bit depth and color type
     let (data, channels) = match image_data {
-        tiff::decoder::DecodingResult::U8(buf) => {
-            decode_tiff_u8(&buf, width, height, color_type)?
-        }
+        tiff::decoder::DecodingResult::U8(buf) => decode_tiff_u8(&buf, width, height, color_type)?,
         tiff::decoder::DecodingResult::U16(buf) => {
             decode_tiff_u16(&buf, width, height, color_type)?
         }
@@ -146,10 +146,7 @@ fn decode_tiff_u8(
 
     // If grayscale, expand to RGB
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         // RGBA: drop alpha channel, keep RGB
@@ -194,10 +191,7 @@ fn decode_tiff_u16(
 
     // If grayscale, expand to RGB
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         // RGBA: drop alpha channel, keep RGB
@@ -222,7 +216,12 @@ fn decode_tiff_u32(
         tiff::ColorType::Gray(_) => 1,
         tiff::ColorType::RGB(_) => 3,
         tiff::ColorType::RGBA(_) => 4,
-        _ => return Err(format!("Unsupported TIFF color type for u32: {:?}", color_type)),
+        _ => {
+            return Err(format!(
+                "Unsupported TIFF color type for u32: {:?}",
+                color_type
+            ))
+        }
     };
 
     let expected_len = (width * height * channels as u32) as usize;
@@ -239,10 +238,7 @@ fn decode_tiff_u32(
 
     // Handle grayscale and RGBA like u16
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         let rgb_data: Vec<f32> = data
@@ -282,10 +278,7 @@ fn decode_tiff_u64(
     let data: Vec<f32> = buf.iter().map(|&v| v as f32 / u64::MAX as f32).collect();
 
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         let rgb_data: Vec<f32> = data
@@ -325,10 +318,7 @@ fn decode_tiff_f32(
     let data = buf.to_vec();
 
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         let rgb_data: Vec<f32> = data
@@ -368,10 +358,7 @@ fn decode_tiff_f64(
     let data: Vec<f32> = buf.iter().map(|&v| v as f32).collect();
 
     if channels == 1 {
-        let rgb_data: Vec<f32> = data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray])
-            .collect();
+        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
         Ok((rgb_data, 3))
     } else if channels == 4 {
         let rgb_data: Vec<f32> = data
@@ -389,8 +376,7 @@ fn decode_png<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     use std::fs::File;
     use std::io::BufReader;
 
-    let file = File::open(path.as_ref())
-        .map_err(|e| format!("Failed to open PNG file: {}", e))?;
+    let file = File::open(path.as_ref()).map_err(|e| format!("Failed to open PNG file: {}", e))?;
     let decoder = png::Decoder::new(BufReader::new(file));
     let mut reader = decoder
         .read_info()
@@ -403,7 +389,8 @@ fn decode_png<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     let bit_depth = info.bit_depth;
 
     // Allocate buffer for image data
-    let buffer_size = reader.output_buffer_size()
+    let buffer_size = reader
+        .output_buffer_size()
         .ok_or_else(|| "Failed to determine PNG buffer size".to_string())?;
     let mut buf = vec![0u8; buffer_size];
     let frame_info = reader
@@ -421,18 +408,10 @@ fn decode_png<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
         (png::ColorType::Grayscale, png::BitDepth::Sixteen) => {
             decode_png_gray16(bytes, width, height)?
         }
-        (png::ColorType::Rgb, png::BitDepth::Eight) => {
-            decode_png_rgb8(bytes, width, height)?
-        }
-        (png::ColorType::Rgb, png::BitDepth::Sixteen) => {
-            decode_png_rgb16(bytes, width, height)?
-        }
-        (png::ColorType::Rgba, png::BitDepth::Eight) => {
-            decode_png_rgba8(bytes, width, height)?
-        }
-        (png::ColorType::Rgba, png::BitDepth::Sixteen) => {
-            decode_png_rgba16(bytes, width, height)?
-        }
+        (png::ColorType::Rgb, png::BitDepth::Eight) => decode_png_rgb8(bytes, width, height)?,
+        (png::ColorType::Rgb, png::BitDepth::Sixteen) => decode_png_rgb16(bytes, width, height)?,
+        (png::ColorType::Rgba, png::BitDepth::Eight) => decode_png_rgba8(bytes, width, height)?,
+        (png::ColorType::Rgba, png::BitDepth::Sixteen) => decode_png_rgba16(bytes, width, height)?,
         (png::ColorType::GrayscaleAlpha, _) => {
             return Err("Grayscale+Alpha PNG not yet supported".to_string());
         }
@@ -588,11 +567,7 @@ fn decode_png_rgba16(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>,
             let g = u16::from_be_bytes([rgba[2], rgba[3]]);
             let b = u16::from_be_bytes([rgba[4], rgba[5]]);
             // Skip alpha at rgba[6], rgba[7]
-            [
-                r as f32 / 65535.0,
-                g as f32 / 65535.0,
-                b as f32 / 65535.0,
-            ]
+            [r as f32 / 65535.0, g as f32 / 65535.0, b as f32 / 65535.0]
         })
         .collect();
 
@@ -621,7 +596,11 @@ mod tests {
         }
 
         let result = decode_image(sample_path);
-        assert!(result.is_ok(), "Failed to decode sample TIFF: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to decode sample TIFF: {:?}",
+            result.err()
+        );
 
         let image = result.unwrap();
 
@@ -646,7 +625,10 @@ mod tests {
 
         // For a negative, values should generally be in a reasonable range
         assert!(min_val >= 0.0, "Min value should be >= 0.0");
-        assert!(max_val <= 1.0 || max_val < 2.0, "Max value should be reasonable");
+        assert!(
+            max_val <= 1.0 || max_val < 2.0,
+            "Max value should be reasonable"
+        );
 
         // Calculate some basic statistics
         let sum: f32 = image.data.iter().sum();

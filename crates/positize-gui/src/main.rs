@@ -93,11 +93,7 @@ impl Default for PositizeApp {
             skip_color_matrix: false,
 
             // Identity matrix by default
-            color_matrix: [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ],
+            color_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
 
             show_color_matrix: false,
             processing_needed: false,
@@ -195,8 +191,10 @@ impl PositizeApp {
                 // Create downsampled preview for fast processing (max 1024px)
                 let preview = downsample_image(&image, 1024);
 
-                eprintln!("[LOAD] Original: {}x{}, Preview: {}x{}",
-                    image.width, image.height, preview.width, preview.height);
+                eprintln!(
+                    "[LOAD] Original: {}x{}, Preview: {}x{}",
+                    image.width, image.height, preview.width, preview.height
+                );
 
                 // Reset all parameters to defaults for new image
                 self.reset_parameters();
@@ -207,8 +205,10 @@ impl PositizeApp {
                         self.base_r = base.medians[0];
                         self.base_g = base.medians[1];
                         self.base_b = base.medians[2];
-                        eprintln!("[LOAD] Base estimation: RGB [{:.6}, {:.6}, {:.6}]",
-                            base.medians[0], base.medians[1], base.medians[2]);
+                        eprintln!(
+                            "[LOAD] Base estimation: RGB [{:.6}, {:.6}, {:.6}]",
+                            base.medians[0], base.medians[1], base.medians[2]
+                        );
                         self.base_estimation = Some(base);
                     }
                     Err(e) => {
@@ -244,11 +244,7 @@ impl PositizeApp {
         self.skip_color_matrix = false;
 
         // Reset color matrix to identity
-        self.color_matrix = [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+        self.color_matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
         eprintln!("[LOAD] Reset all parameters to defaults");
     }
@@ -295,6 +291,17 @@ impl PositizeApp {
             skip_color_matrix: self.skip_color_matrix,
             exposure_compensation: self.exposure_compensation,
             debug: false,
+            // New auto-adjustment options with defaults
+            enable_auto_levels: true,
+            auto_levels_clip_percent: 1.0,
+            enable_auto_color: true,
+            auto_color_strength: 0.8,
+            base_brightest_percent: 10.0,
+            base_sampling_mode: positize_core::models::BaseSamplingMode::Median,
+            inversion_mode: positize_core::models::InversionMode::Linear,
+            shadow_lift_mode: positize_core::models::ShadowLiftMode::Percentile,
+            shadow_lift_value: 0.02,
+            highlight_compression: 1.0,
         };
 
         // Process the image
@@ -343,19 +350,20 @@ impl PositizeApp {
                 let available_size = ui.available_size();
 
                 // Scale to fit while maintaining aspect ratio
-                let scale = (available_size.x / size.x).min(available_size.y / size.y).min(1.0);
+                let scale = (available_size.x / size.x)
+                    .min(available_size.y / size.y)
+                    .min(1.0);
                 let display_size = size * scale;
 
                 // Make image interactive if any eyedropper is active
                 let is_eyedropper_active = self.eyedropper_mode || self.white_balance_mode;
-                let response = ui.add(
-                    egui::Image::new((texture.id(), display_size))
-                        .sense(if is_eyedropper_active {
-                            egui::Sense::click()
-                        } else {
-                            egui::Sense::hover()
-                        })
-                );
+                let response = ui.add(egui::Image::new((texture.id(), display_size)).sense(
+                    if is_eyedropper_active {
+                        egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
+                    },
+                ));
 
                 // Change cursor when eyedropper is active
                 if is_eyedropper_active {
@@ -407,8 +415,10 @@ impl PositizeApp {
 
         for dy in 0..region_size {
             for dx in 0..region_size {
-                let sample_x = (x as i32 + dx as i32 - half_size as i32).clamp(0, orig_image.width as i32 - 1) as u32;
-                let sample_y = (y as i32 + dy as i32 - half_size as i32).clamp(0, orig_image.height as i32 - 1) as u32;
+                let sample_x = (x as i32 + dx as i32 - half_size as i32)
+                    .clamp(0, orig_image.width as i32 - 1) as u32;
+                let sample_y = (y as i32 + dy as i32 - half_size as i32)
+                    .clamp(0, orig_image.height as i32 - 1) as u32;
 
                 let idx = ((sample_y * orig_image.width + sample_x) * 3) as usize;
                 if idx + 2 < orig_image.data.len() {
@@ -446,10 +456,14 @@ impl PositizeApp {
             self.white_balance_g = max_channel / avg_g.max(0.001);
             self.white_balance_b = max_channel / avg_b.max(0.001);
 
-            eprintln!("[WHITE BALANCE] Sampled at ({}, {}) - RGB: [{:.6}, {:.6}, {:.6}]",
-                x, y, avg_r, avg_g, avg_b);
-            eprintln!("[WHITE BALANCE] Multipliers: R={:.3}x G={:.3}x B={:.3}x",
-                self.white_balance_r, self.white_balance_g, self.white_balance_b);
+            eprintln!(
+                "[WHITE BALANCE] Sampled at ({}, {}) - RGB: [{:.6}, {:.6}, {:.6}]",
+                x, y, avg_r, avg_g, avg_b
+            );
+            eprintln!(
+                "[WHITE BALANCE] Multipliers: R={:.3}x G={:.3}x B={:.3}x",
+                self.white_balance_r, self.white_balance_g, self.white_balance_b
+            );
 
             self.processing_needed = true;
         }
@@ -472,8 +486,10 @@ impl PositizeApp {
 
         for dy in 0..region_size {
             for dx in 0..region_size {
-                let sample_x = (x as i32 + dx as i32 - half_size as i32).clamp(0, orig_image.width as i32 - 1) as u32;
-                let sample_y = (y as i32 + dy as i32 - half_size as i32).clamp(0, orig_image.height as i32 - 1) as u32;
+                let sample_x = (x as i32 + dx as i32 - half_size as i32)
+                    .clamp(0, orig_image.width as i32 - 1) as u32;
+                let sample_y = (y as i32 + dy as i32 - half_size as i32)
+                    .clamp(0, orig_image.height as i32 - 1) as u32;
 
                 let idx = ((sample_y * orig_image.width + sample_x) * 3) as usize;
                 if idx + 2 < orig_image.data.len() {
@@ -503,8 +519,15 @@ impl PositizeApp {
             self.base_g = sum_g / count;
             self.base_b = sum_b / count;
 
-            eprintln!("[EYEDROPPER] Sampled at ({}, {}) - RGB: [{:.6}, {:.6}, {:.6}] from {} pixels",
-                x, y, self.base_r, self.base_g, self.base_b, samples.len());
+            eprintln!(
+                "[EYEDROPPER] Sampled at ({}, {}) - RGB: [{:.6}, {:.6}, {:.6}] from {} pixels",
+                x,
+                y,
+                self.base_r,
+                self.base_g,
+                self.base_b,
+                samples.len()
+            );
 
             self.processing_needed = true;
         }
@@ -664,7 +687,10 @@ impl PositizeApp {
             if !self.skip_tone_curve {
                 ui.label("Tone curve strength (0 = linear, 1 = max):");
                 if ui
-                    .add(egui::Slider::new(&mut self.tone_curve_strength, 0.0..=1.0).text("Strength"))
+                    .add(
+                        egui::Slider::new(&mut self.tone_curve_strength, 0.0..=1.0)
+                            .text("Strength"),
+                    )
                     .changed()
                 {
                     self.processing_needed = true;
@@ -700,11 +726,7 @@ impl PositizeApp {
                     });
                 }
                 if ui.button("Reset to Identity").clicked() {
-                    self.color_matrix = [
-                        [1.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                    ];
+                    self.color_matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
                     self.processing_needed = true;
                 }
             }
@@ -717,12 +739,17 @@ impl PositizeApp {
             ui.label(format!("Original: {}x{}", loaded.width, loaded.height));
         }
         if let Some(ref preview) = self.preview_image {
-            ui.label(format!("Preview: {}x{} (for fast adjustment)",
-                preview.width, preview.height));
+            ui.label(format!(
+                "Preview: {}x{} (for fast adjustment)",
+                preview.width, preview.height
+            ));
         }
 
         if let Some(ref path) = self.loaded_path {
-            ui.label(format!("File: {}", path.file_name().unwrap().to_string_lossy()));
+            ui.label(format!(
+                "File: {}",
+                path.file_name().unwrap().to_string_lossy()
+            ));
         }
     }
 }
@@ -757,11 +784,11 @@ fn downsample_image(image: &DecodedImage, max_dimension: u32) -> DecodedImage {
             let b = (image.data[idx + 2] * 65535.0).clamp(0.0, 65535.0) as u16;
 
             // Convert to u8 for intermediate processing
-            img_buffer.put_pixel(x, y, image::Rgb([
-                (r >> 8) as u8,
-                (g >> 8) as u8,
-                (b >> 8) as u8,
-            ]));
+            img_buffer.put_pixel(
+                x,
+                y,
+                image::Rgb([(r >> 8) as u8, (g >> 8) as u8, (b >> 8) as u8]),
+            );
         }
     }
 

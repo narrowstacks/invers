@@ -139,6 +139,77 @@ pub struct ConvertOptions {
 
     /// Enable debug output
     pub debug: bool,
+
+    // New auto-adjustment options
+    /// Enable auto-levels (histogram stretching per channel)
+    #[serde(default = "default_true")]
+    pub enable_auto_levels: bool,
+
+    /// Clipping percentage for auto-levels (0.0-10.0)
+    #[serde(default = "default_clip_percent")]
+    pub auto_levels_clip_percent: f32,
+
+    /// Enable auto-color (neutralize color casts)
+    /// Note: Usually unnecessary when auto-levels is enabled
+    #[serde(default = "default_false")]
+    pub enable_auto_color: bool,
+
+    /// Auto-color correction strength (0.0-1.0)
+    #[serde(default = "default_auto_color_strength")]
+    pub auto_color_strength: f32,
+
+    /// Base estimation brightest pixel percentage (1.0-30.0)
+    #[serde(default = "default_base_brightest_percent")]
+    pub base_brightest_percent: f32,
+
+    /// Base estimation sampling mode
+    #[serde(default)]
+    pub base_sampling_mode: BaseSamplingMode,
+
+    /// Inversion mode (linear or logarithmic)
+    #[serde(default)]
+    pub inversion_mode: InversionMode,
+
+    /// Shadow lift mode
+    #[serde(default)]
+    pub shadow_lift_mode: ShadowLiftMode,
+
+    /// Shadow lift target black point (0.0-0.1)
+    #[serde(default = "default_shadow_lift_value")]
+    pub shadow_lift_value: f32,
+
+    /// Highlight compression factor (0.0-1.0, 1.0 = no compression)
+    #[serde(default = "default_one")]
+    pub highlight_compression: f32,
+}
+
+// Default value functions for serde
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_clip_percent() -> f32 {
+    1.0
+}
+
+fn default_auto_color_strength() -> f32 {
+    0.8
+}
+
+fn default_base_brightest_percent() -> f32 {
+    10.0
+}
+
+fn default_shadow_lift_value() -> f32 {
+    0.02
+}
+
+fn default_one() -> f32 {
+    1.0
 }
 
 /// Output format options
@@ -164,6 +235,42 @@ pub enum BitDepthPolicy {
     MaxPrecision,
 }
 
+/// Base estimation sampling mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaseSamplingMode {
+    /// Use median of brightest pixels (default, robust)
+    Median,
+
+    /// Use mean of brightest pixels (more sensitive to maximum)
+    Mean,
+
+    /// Use maximum values (most aggressive)
+    Max,
+}
+
+/// Inversion mode for negative-to-positive conversion
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InversionMode {
+    /// Linear inversion: (base - negative) / base
+    Linear,
+
+    /// Logarithmic inversion: 10^(log10(base) - log10(negative))
+    Logarithmic,
+}
+
+/// Shadow lift mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShadowLiftMode {
+    /// Fixed lift value
+    Fixed,
+
+    /// Percentile-based adaptive lift (e.g., lift 1st percentile to target)
+    Percentile,
+
+    /// No shadow lift
+    None,
+}
+
 impl Default for ToneCurveParams {
     fn default() -> Self {
         Self {
@@ -183,5 +290,23 @@ impl Default for OutputFormat {
 impl Default for BitDepthPolicy {
     fn default() -> Self {
         Self::MatchInput
+    }
+}
+
+impl Default for BaseSamplingMode {
+    fn default() -> Self {
+        Self::Median
+    }
+}
+
+impl Default for InversionMode {
+    fn default() -> Self {
+        Self::Linear
+    }
+}
+
+impl Default for ShadowLiftMode {
+    fn default() -> Self {
+        Self::Percentile
     }
 }

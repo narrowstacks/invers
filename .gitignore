@@ -27,3 +27,6 @@ target/
 
 # other generated files
 *.xmp
+OPTIMIZATION_SUMMARY.md
+assets/.DS_Store
+assets/Grain2Pixel.log
