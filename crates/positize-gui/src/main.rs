@@ -277,6 +277,11 @@ impl PositizeApp {
         };
 
         // Build convert options
+        let defaults = positize_core::config::pipeline_config_handle()
+            .config
+            .defaults
+            .clone();
+
         let options = ConvertOptions {
             input_paths: vec![],
             output_dir: PathBuf::from("."),
@@ -287,21 +292,27 @@ impl PositizeApp {
             scan_profile: None,
             base_estimation: Some(base),
             num_threads: None,
-            skip_tone_curve: self.skip_tone_curve,
-            skip_color_matrix: self.skip_color_matrix,
-            exposure_compensation: self.exposure_compensation,
+            skip_tone_curve: self.skip_tone_curve || defaults.skip_tone_curve,
+            skip_color_matrix: self.skip_color_matrix || defaults.skip_color_matrix,
+            exposure_compensation: defaults.exposure_compensation * self.exposure_compensation,
             debug: false,
-            // New auto-adjustment options with defaults
-            enable_auto_levels: true,
-            auto_levels_clip_percent: 1.0,
-            enable_auto_color: true,
-            auto_color_strength: 0.8,
-            base_brightest_percent: 10.0,
-            base_sampling_mode: positize_core::models::BaseSamplingMode::Median,
-            inversion_mode: positize_core::models::InversionMode::Linear,
-            shadow_lift_mode: positize_core::models::ShadowLiftMode::Percentile,
-            shadow_lift_value: 0.02,
-            highlight_compression: 1.0,
+            enable_auto_levels: defaults.enable_auto_levels,
+            auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+            enable_auto_color: defaults.enable_auto_color,
+            auto_color_strength: defaults.auto_color_strength,
+            auto_color_min_gain: defaults.auto_color_min_gain,
+            auto_color_max_gain: defaults.auto_color_max_gain,
+            base_brightest_percent: defaults.base_brightest_percent,
+            base_sampling_mode: defaults.base_sampling_mode,
+            inversion_mode: defaults.inversion_mode,
+            shadow_lift_mode: defaults.shadow_lift_mode,
+            shadow_lift_value: defaults.shadow_lift_value,
+            highlight_compression: defaults.highlight_compression,
+            enable_auto_exposure: defaults.enable_auto_exposure,
+            auto_exposure_target_median: defaults.auto_exposure_target_median,
+            auto_exposure_strength: defaults.auto_exposure_strength,
+            auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+            auto_exposure_max_gain: defaults.auto_exposure_max_gain,
         };
 
         // Process the image

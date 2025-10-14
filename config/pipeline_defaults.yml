@@ -1,0 +1,94 @@
+# Default pipeline configuration for Positize.
+#
+# Edit the values in this file to tweak processing behaviour without rebuilding.
+# All fields are optional: any omitted value falls back to the built-in default.
+
+defaults:
+  enable_auto_levels: true
+  auto_levels_clip_percent: 0.25
+  enable_auto_color: true
+  auto_color_strength: 0.6
+  auto_color_min_gain: 0.7
+  auto_color_max_gain: 1.3
+  base_brightest_percent: 5.0
+  base_sampling_mode: Median
+  inversion_mode: Linear
+  shadow_lift_mode: Percentile
+  shadow_lift_value: 0.02
+  highlight_compression: 1.0
+  enable_auto_exposure: true
+  auto_exposure_target_median: 0.25
+  auto_exposure_strength: 1.0
+  auto_exposure_min_gain: 0.6
+  auto_exposure_max_gain: 1.4
+  exposure_compensation: 1.0
+  skip_tone_curve: false
+  skip_color_matrix: false
+
+testing:
+  parameter_test_defaults:
+    enable_auto_levels: true
+    clip_percent: 0.25
+    enable_auto_color: true
+    auto_color_strength: 0.6
+    auto_color_min_gain: 0.7
+    auto_color_max_gain: 1.3
+    base_brightest_percent: 5.0
+    base_sampling_mode: Median
+    inversion_mode: Linear
+    shadow_lift_mode: Percentile
+    shadow_lift_value: 0.02
+    highlight_compression: 1.0
+    tone_curve_strength: 0.5
+    skip_tone_curve: false
+    exposure_compensation: 1.0
+    enable_auto_exposure: true
+    auto_exposure_target_median: 0.25
+    auto_exposure_strength: 1.0
+    auto_exposure_min_gain: 0.6
+    auto_exposure_max_gain: 1.4
+
+  default_grid:
+    auto_levels: [true]
+    clip_percent: [0.25, 0.5, 1.0]
+    auto_color: [true, false]
+    auto_color_strength: [0.6, 0.8]
+    auto_color_min_gain: [0.7, 0.8]
+    auto_color_max_gain: [1.2, 1.3]
+    base_brightest_percent: [5.0, 10.0, 15.0]
+    base_sampling_mode: [Median]
+    inversion_mode: [Linear]
+    shadow_lift_mode: [Percentile]
+    shadow_lift_value: [0.02]
+    tone_curve_strength: [0.4, 0.5, 0.6, 0.7]
+    exposure_compensation: [1.0]
+
+  minimal_grid:
+    auto_levels: [true]
+    clip_percent: [0.25]
+    auto_color: [true, false]
+    auto_color_strength: [0.6, 0.8]
+    auto_color_min_gain: [0.7]
+    auto_color_max_gain: [1.3]
+    base_brightest_percent: [5.0, 10.0]
+    base_sampling_mode: [Median]
+    inversion_mode: [Linear]
+    shadow_lift_mode: [Percentile]
+    shadow_lift_value: [0.02]
+    tone_curve_strength: [0.4, 0.5, 0.6]
+    exposure_compensation: [1.0]
+
+  comprehensive_grid:
+    auto_levels: [true]
+    clip_percent: [0.2, 0.4, 0.6, 1.0, 2.0, 5.0]
+    auto_color: [true, false]
+    auto_color_strength: [0.5, 0.6, 0.8, 1.0]
+    auto_color_min_gain: [0.65, 0.7, 0.75]
+    auto_color_max_gain: [1.1, 1.2, 1.3, 1.4]
+    base_brightest_percent: [5.0, 10.0, 15.0, 20.0]
+    base_sampling_mode: [Median, Mean]
+    inversion_mode: [Linear]
+    shadow_lift_mode: [Percentile]
+    shadow_lift_value: [0.015, 0.02, 0.03]
+    tone_curve_strength: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    exposure_compensation: [0.9, 1.0, 1.05]

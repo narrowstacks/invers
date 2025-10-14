@@ -361,6 +361,10 @@ fn cmd_convert(
     exposure: f32,
     debug: bool,
 ) -> Result<(), String> {
+    positize_core::config::log_config_usage();
+    let config_handle = positize_core::config::pipeline_config_handle();
+    let defaults = config_handle.config.defaults.clone();
+
     println!("Converting {} to positive...", input.display());
 
     // Decode input image
@@ -425,21 +429,27 @@ fn cmd_convert(
         scan_profile: None,
         base_estimation: Some(base_estimation),
         num_threads: None,
-        skip_tone_curve: no_tonecurve,
-        skip_color_matrix: no_colormatrix,
-        exposure_compensation: exposure,
+        skip_tone_curve: no_tonecurve || defaults.skip_tone_curve,
+        skip_color_matrix: no_colormatrix || defaults.skip_color_matrix,
+        exposure_compensation: defaults.exposure_compensation * exposure,
         debug,
-        // New auto-adjustment options with defaults
-        enable_auto_levels: true,
-        auto_levels_clip_percent: 1.0,
-        enable_auto_color: true,
-        auto_color_strength: 0.8,
-        base_brightest_percent: 10.0,
-        base_sampling_mode: positize_core::models::BaseSamplingMode::Median,
-        inversion_mode: positize_core::models::InversionMode::Linear,
-        shadow_lift_mode: positize_core::models::ShadowLiftMode::Percentile,
-        shadow_lift_value: 0.02,
-        highlight_compression: 1.0,
+        enable_auto_levels: defaults.enable_auto_levels,
+        auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+        enable_auto_color: defaults.enable_auto_color,
+        auto_color_strength: defaults.auto_color_strength,
+        auto_color_min_gain: defaults.auto_color_min_gain,
+        auto_color_max_gain: defaults.auto_color_max_gain,
+        base_brightest_percent: defaults.base_brightest_percent,
+        base_sampling_mode: defaults.base_sampling_mode,
+        inversion_mode: defaults.inversion_mode,
+        shadow_lift_mode: defaults.shadow_lift_mode,
+        shadow_lift_value: defaults.shadow_lift_value,
+        highlight_compression: defaults.highlight_compression,
+        enable_auto_exposure: defaults.enable_auto_exposure,
+        auto_exposure_target_median: defaults.auto_exposure_target_median,
+        auto_exposure_strength: defaults.auto_exposure_strength,
+        auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+        auto_exposure_max_gain: defaults.auto_exposure_max_gain,
     };
 
     // Process image
@@ -644,6 +654,10 @@ fn cmd_diagnose(
     exposure: f32,
     debug: bool,
 ) -> Result<(), String> {
+    positize_core::config::log_config_usage();
+    let config_handle = positize_core::config::pipeline_config_handle();
+    let defaults = config_handle.config.defaults.clone();
+
     println!("========================================");
     println!("POSITIZE DIAGNOSTIC COMPARISON");
     println!("========================================\n");
@@ -716,21 +730,27 @@ fn cmd_diagnose(
         scan_profile: None,
         base_estimation: Some(base_estimation),
         num_threads: None,
-        skip_tone_curve: no_tonecurve,
-        skip_color_matrix: no_colormatrix,
-        exposure_compensation: exposure,
+        skip_tone_curve: no_tonecurve || defaults.skip_tone_curve,
+        skip_color_matrix: no_colormatrix || defaults.skip_color_matrix,
+        exposure_compensation: defaults.exposure_compensation * exposure,
         debug,
-        // New auto-adjustment options with defaults
-        enable_auto_levels: true,
-        auto_levels_clip_percent: 1.0,
-        enable_auto_color: true,
-        auto_color_strength: 0.8,
-        base_brightest_percent: 10.0,
-        base_sampling_mode: positize_core::models::BaseSamplingMode::Median,
-        inversion_mode: positize_core::models::InversionMode::Linear,
-        shadow_lift_mode: positize_core::models::ShadowLiftMode::Percentile,
-        shadow_lift_value: 0.02,
-        highlight_compression: 1.0,
+        enable_auto_levels: defaults.enable_auto_levels,
+        auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+        enable_auto_color: defaults.enable_auto_color,
+        auto_color_strength: defaults.auto_color_strength,
+        auto_color_min_gain: defaults.auto_color_min_gain,
+        auto_color_max_gain: defaults.auto_color_max_gain,
+        base_brightest_percent: defaults.base_brightest_percent,
+        base_sampling_mode: defaults.base_sampling_mode,
+        inversion_mode: defaults.inversion_mode,
+        shadow_lift_mode: defaults.shadow_lift_mode,
+        shadow_lift_value: defaults.shadow_lift_value,
+        highlight_compression: defaults.highlight_compression,
+        enable_auto_exposure: defaults.enable_auto_exposure,
+        auto_exposure_target_median: defaults.auto_exposure_target_median,
+        auto_exposure_strength: defaults.auto_exposure_strength,
+        auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+        auto_exposure_max_gain: defaults.auto_exposure_max_gain,
     };
 
     let our_processed = positize_core::pipeline::process_image(decoded_original, &options)?;
@@ -783,6 +803,7 @@ fn cmd_test_params(
     tone_strength: Option<f32>,
     exposure: Option<f32>,
 ) -> Result<(), String> {
+    positize_core::config::log_config_usage();
     println!("========================================");
     println!("PARAMETER TESTING & OPTIMIZATION");
     println!("========================================\n");

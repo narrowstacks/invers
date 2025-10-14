@@ -3,6 +3,8 @@
 //! Provides auto-levels, auto-color, and other automatic corrections
 //! similar to Photoshop's automatic adjustment tools.
 
+use std::cmp::Ordering;
+
 /// Auto-levels: Stretch histogram to full 0.0-1.0 range per channel
 /// This is the key missing step that Photoshop/Grain2Pixel applies
 pub fn auto_levels(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6] {
@@ -70,53 +72,89 @@ fn stretch_value(value: f32, old_min: f32, old_max: f32) -> f32 {
     stretched.clamp(0.0, 1.0)
 }
 
+const AUTO_COLOR_INITIAL_LOW: f32 = 0.35;
+const AUTO_COLOR_INITIAL_HIGH: f32 = 0.65;
+const AUTO_COLOR_EXPANSION_STEP: f32 = 0.10;
+const AUTO_COLOR_MAX_EXPANSIONS: usize = 4;
+const AUTO_COLOR_MIN_SAMPLES: usize = 512;
+
+#[derive(Default, Clone, Copy)]
+struct ChannelStats {
+    count: usize,
+    r_sum: f32,
+    g_sum: f32,
+    b_sum: f32,
+}
+
+impl ChannelStats {
+    fn add(&mut self, r: f32, g: f32, b: f32) {
+        self.count += 1;
+        self.r_sum += r;
+        self.g_sum += g;
+        self.b_sum += b;
+    }
+}
+
 /// Auto-color: Neutralize color casts by adjusting midtones
 /// Similar to Photoshop's Auto Color command
-pub fn auto_color(data: &mut [f32], channels: u8, strength: f32) -> [f32; 3] {
+pub fn auto_color(
+    data: &mut [f32],
+    channels: u8,
+    strength: f32,
+    min_gain: f32,
+    max_gain: f32,
+) -> [f32; 3] {
     if channels != 3 {
         panic!("auto_color only supports 3-channel RGB images");
     }
 
-    // Find average of midtone pixels (40-60% brightness range)
-    let mut r_sum = 0.0;
-    let mut g_sum = 0.0;
-    let mut b_sum = 0.0;
-    let mut count = 0;
+    let mut low = AUTO_COLOR_INITIAL_LOW;
+    let mut high = AUTO_COLOR_INITIAL_HIGH;
+    let mut stats = collect_channel_stats(data, low, high);
+    let mut expansions = 0;
 
-    for pixel in data.chunks_exact(3) {
-        let brightness = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
-        if brightness >= 0.4 && brightness <= 0.6 {
-            r_sum += pixel[0];
-            g_sum += pixel[1];
-            b_sum += pixel[2];
-            count += 1;
-        }
+    while stats.count < AUTO_COLOR_MIN_SAMPLES
+        && expansions < AUTO_COLOR_MAX_EXPANSIONS
+        && (low > 0.0 || high < 1.0)
+    {
+        low = (low - AUTO_COLOR_EXPANSION_STEP).max(0.0);
+        high = (high + AUTO_COLOR_EXPANSION_STEP).min(1.0);
+        expansions += 1;
+        stats = collect_channel_stats(data, low, high);
     }
 
-    if count == 0 {
-        return [0.0, 0.0, 0.0]; // No adjustment
+    if stats.count == 0 {
+        // Fallback: use entire histogram
+        stats = collect_channel_stats(data, 0.0, 1.0);
     }
 
-    let r_avg = r_sum / count as f32;
-    let g_avg = g_sum / count as f32;
-    let b_avg = b_sum / count as f32;
+    if stats.count == 0 {
+        return [1.0, 1.0, 1.0];
+    }
+
+    let sample_count = stats.count as f32;
+    let r_avg = stats.r_sum / sample_count;
+    let g_avg = stats.g_sum / sample_count;
+    let b_avg = stats.b_sum / sample_count;
 
     // Calculate the target neutral gray value (average of all channels)
     let target_gray = (r_avg + g_avg + b_avg) / 3.0;
 
     // Calculate adjustment factors to bring each channel to neutral
+    let clamp = |value: f32| value.clamp(min_gain, max_gain);
+
     let r_adjustment = if r_avg > 0.0001 {
-        target_gray / r_avg
+        clamp(target_gray / r_avg)
     } else {
         1.0
     };
     let g_adjustment = if g_avg > 0.0001 {
-        target_gray / g_avg
+        clamp(target_gray / g_avg)
     } else {
         1.0
     };
     let b_adjustment = if b_avg > 0.0001 {
-        target_gray / b_avg
+        clamp(target_gray / b_avg)
     } else {
         1.0
     };
@@ -131,6 +169,25 @@ pub fn auto_color(data: &mut [f32], channels: u8, strength: f32) -> [f32; 3] {
 
     // Return adjustments for debugging
     [r_adjustment, g_adjustment, b_adjustment]
+}
+
+fn collect_channel_stats(data: &[f32], low: f32, high: f32) -> ChannelStats {
+    if low <= 0.0 && high >= 1.0 {
+        let mut stats = ChannelStats::default();
+        for pixel in data.chunks_exact(3) {
+            stats.add(pixel[0], pixel[1], pixel[2]);
+        }
+        return stats;
+    }
+
+    let mut stats = ChannelStats::default();
+    for pixel in data.chunks_exact(3) {
+        let brightness = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
+        if brightness >= low && brightness <= high {
+            stats.add(pixel[0], pixel[1], pixel[2]);
+        }
+    }
+    stats
 }
 
 /// Adaptive shadow lift based on percentile
@@ -171,6 +228,55 @@ pub fn compress_highlights(data: &mut [f32], threshold: f32, compression: f32) {
     }
 }
 
+/// Automatic exposure normalization. Scales image so that the median luminance
+/// approaches `target_median`. Returns the gain that was applied.
+pub fn auto_exposure(
+    data: &mut [f32],
+    target_median: f32,
+    strength: f32,
+    min_gain: f32,
+    max_gain: f32,
+) -> f32 {
+    if data.is_empty() {
+        return 1.0;
+    }
+
+    // Collect luminance samples (Rec.709 weights)
+    let mut luminances = Vec::with_capacity(data.len() / 3);
+    for pixel in data.chunks_exact(3) {
+        let lum = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+        luminances.push(lum);
+    }
+
+    if luminances.is_empty() {
+        return 1.0;
+    }
+
+    let mid = luminances.len() / 2;
+    luminances.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(Ordering::Equal)
+    });
+    let median = luminances[mid];
+
+    if !median.is_finite() || median <= 1e-6 {
+        return 1.0;
+    }
+
+    let desired_gain = (target_median / median).clamp(min_gain, max_gain);
+    let gain = 1.0 + strength * (desired_gain - 1.0);
+    let gain = gain.clamp(min_gain, max_gain);
+
+    if !gain.is_finite() || (gain - 1.0).abs() < 1e-6 {
+        return 1.0;
+    }
+
+    for value in data.iter_mut() {
+        *value = (*value * gain).clamp(0.0, 1.0);
+    }
+
+    gain
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +295,10 @@ mod tests {
 
         // Check that values have been stretched
         assert!(data[0] < 0.2); // First R value should be lower
-        assert!(data[1] > 0.3); // First G value might be higher or lower
+        let min_val = data.iter().cloned().fold(f32::MAX, f32::min);
+        let max_val = data.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(min_val <= 0.001, "expected min close to 0, got {}", min_val);
+        assert!(max_val >= 0.999, "expected max close to 1, got {}", max_val);
 
         println!("Auto-levels params: {:?}", params);
         println!("Adjusted data: {:?}", data);
@@ -203,7 +312,7 @@ mod tests {
             0.5, 0.4, 0.4, 0.5, 0.4, 0.4, 0.5, 0.4, 0.4,
         ];
 
-        let adjustments = auto_color(&mut data, 3, 1.0);
+    let adjustments = auto_color(&mut data, 3, 1.0, 0.7, 1.3);
 
         println!("Color adjustments: {:?}", adjustments);
         println!("Corrected data: {:?}", data);

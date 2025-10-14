@@ -3,7 +3,8 @@
 //! Provides tools for testing different parameter combinations to optimize
 //! conversion results against reference images (e.g., Grain2Pixel).
 
-use crate::decoders::{decode_image, DecodedImage};
+use crate::config;
+use crate::decoders::decode_image;
 use crate::diagnostics::{compare_conversions, DiagnosticReport};
 use crate::models::{
     BaseSamplingMode, ConvertOptions, InversionMode, OutputFormat, ShadowLiftMode,
@@ -25,6 +26,8 @@ pub struct ParameterTest {
     // Color neutralization
     pub enable_auto_color: bool,
     pub auto_color_strength: f32,
+    pub auto_color_min_gain: f32,
+    pub auto_color_max_gain: f32,
 
     // Base estimation
     pub base_brightest_percent: f32,
@@ -38,6 +41,13 @@ pub struct ParameterTest {
     pub shadow_lift_value: f32,
     pub highlight_compression: f32,
 
+    // Auto exposure
+    pub enable_auto_exposure: bool,
+    pub auto_exposure_target_median: f32,
+    pub auto_exposure_strength: f32,
+    pub auto_exposure_min_gain: f32,
+    pub auto_exposure_max_gain: f32,
+
     // Tone curve
     pub tone_curve_strength: f32,
     pub skip_tone_curve: bool,
@@ -48,21 +58,17 @@ pub struct ParameterTest {
 
 impl Default for ParameterTest {
     fn default() -> Self {
-        Self {
-            enable_auto_levels: true,
-            clip_percent: 1.0,
-            enable_auto_color: true,
-            auto_color_strength: 0.8,
-            base_brightest_percent: 10.0,
-            base_sampling_mode: BaseSamplingMode::Median,
-            inversion_mode: InversionMode::Linear,
-            shadow_lift_mode: ShadowLiftMode::Percentile,
-            shadow_lift_value: 0.02,
-            highlight_compression: 1.0,
-            tone_curve_strength: 0.5,
-            skip_tone_curve: false,
-            exposure_compensation: 1.0,
+        let handle = config::pipeline_config_handle();
+
+        if let Some(defaults) = handle.config.testing.parameter_test_defaults.clone() {
+            let mut defaults = defaults;
+            defaults.sanitize();
+            return defaults.into();
         }
+
+        let mut defaults = config::ParameterTestDefaults::default();
+        defaults.sanitize();
+        defaults.into()
     }
 }
 
@@ -87,6 +93,8 @@ pub struct ParameterGrid {
     pub clip_percent: Vec<f32>,
     pub auto_color: Vec<bool>,
     pub auto_color_strength: Vec<f32>,
+    pub auto_color_min_gain: Vec<f32>,
+    pub auto_color_max_gain: Vec<f32>,
     pub base_brightest_percent: Vec<f32>,
     pub base_sampling_mode: Vec<BaseSamplingMode>,
     pub inversion_mode: Vec<InversionMode>,
@@ -98,55 +106,40 @@ pub struct ParameterGrid {
 
 impl Default for ParameterGrid {
     fn default() -> Self {
-        Self {
-            auto_levels: vec![true],
-            clip_percent: vec![1.0, 2.0],
-            auto_color: vec![true, false],
-            auto_color_strength: vec![0.8],
-            base_brightest_percent: vec![10.0, 15.0],
-            base_sampling_mode: vec![BaseSamplingMode::Median],
-            inversion_mode: vec![InversionMode::Linear],
-            shadow_lift_mode: vec![ShadowLiftMode::Percentile],
-            shadow_lift_value: vec![0.02],
-            tone_curve_strength: vec![0.5, 0.6, 0.7],
-            exposure_compensation: vec![1.0],
+        let handle = config::pipeline_config_handle();
+        if let Some(values) = handle.config.testing.default_grid.clone() {
+            let mut values = values;
+            values.sanitize_with(config::TestingGridValues::default_grid());
+            return values.into();
         }
+
+        config::TestingGridValues::default_grid().into()
     }
 }
 
 impl ParameterGrid {
     /// Create a minimal grid for quick testing (12 combinations)
     pub fn minimal() -> Self {
-        Self {
-            auto_levels: vec![true],
-            clip_percent: vec![1.0],
-            auto_color: vec![true, false],
-            auto_color_strength: vec![0.8],
-            base_brightest_percent: vec![10.0],
-            base_sampling_mode: vec![BaseSamplingMode::Median],
-            inversion_mode: vec![InversionMode::Linear],
-            shadow_lift_mode: vec![ShadowLiftMode::Percentile],
-            shadow_lift_value: vec![0.02],
-            tone_curve_strength: vec![0.5, 0.6, 0.7],
-            exposure_compensation: vec![1.0],
+        let handle = config::pipeline_config_handle();
+        if let Some(values) = handle.config.testing.minimal_grid.clone() {
+            let mut values = values;
+            values.sanitize_with(config::TestingGridValues::minimal_grid());
+            return values.into();
         }
+
+        config::TestingGridValues::minimal_grid().into()
     }
 
     /// Create a comprehensive grid for thorough testing (~200 combinations)
     pub fn comprehensive() -> Self {
-        Self {
-            auto_levels: vec![true],
-            clip_percent: vec![0.5, 1.0, 2.0, 5.0],
-            auto_color: vec![true, false],
-            auto_color_strength: vec![0.6, 0.8, 1.0],
-            base_brightest_percent: vec![10.0, 15.0, 20.0],
-            base_sampling_mode: vec![BaseSamplingMode::Median, BaseSamplingMode::Mean],
-            inversion_mode: vec![InversionMode::Linear],
-            shadow_lift_mode: vec![ShadowLiftMode::Percentile],
-            shadow_lift_value: vec![0.02, 0.05],
-            tone_curve_strength: vec![0.4, 0.5, 0.6, 0.7, 0.8],
-            exposure_compensation: vec![1.0],
+        let handle = config::pipeline_config_handle();
+        if let Some(values) = handle.config.testing.comprehensive_grid.clone() {
+            let mut values = values;
+            values.sanitize_with(config::TestingGridValues::comprehensive_grid());
+            return values.into();
         }
+
+        config::TestingGridValues::comprehensive_grid().into()
     }
 }
 
@@ -186,12 +179,19 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         auto_levels_clip_percent: params.clip_percent,
         enable_auto_color: params.enable_auto_color,
         auto_color_strength: params.auto_color_strength,
+        auto_color_min_gain: params.auto_color_min_gain,
+        auto_color_max_gain: params.auto_color_max_gain,
         base_brightest_percent: params.base_brightest_percent,
         base_sampling_mode: params.base_sampling_mode,
         inversion_mode: params.inversion_mode,
         shadow_lift_mode: params.shadow_lift_mode,
         shadow_lift_value: params.shadow_lift_value,
         highlight_compression: params.highlight_compression,
+        enable_auto_exposure: params.enable_auto_exposure,
+        auto_exposure_target_median: params.auto_exposure_target_median,
+        auto_exposure_strength: params.auto_exposure_strength,
+        auto_exposure_min_gain: params.auto_exposure_min_gain,
+        auto_exposure_max_gain: params.auto_exposure_max_gain,
     };
 
     // Process with our pipeline
@@ -236,6 +236,53 @@ fn calculate_contrast_ratio(report: &DiagnosticReport) -> f32 {
         tp_contrast / our_contrast
     } else {
         1.0
+    }
+}
+
+impl From<config::ParameterTestDefaults> for ParameterTest {
+    fn from(defaults: config::ParameterTestDefaults) -> Self {
+        Self {
+            enable_auto_levels: defaults.enable_auto_levels,
+            clip_percent: defaults.clip_percent,
+            enable_auto_color: defaults.enable_auto_color,
+            auto_color_strength: defaults.auto_color_strength,
+            auto_color_min_gain: defaults.auto_color_min_gain,
+            auto_color_max_gain: defaults.auto_color_max_gain,
+            base_brightest_percent: defaults.base_brightest_percent,
+            base_sampling_mode: defaults.base_sampling_mode,
+            inversion_mode: defaults.inversion_mode,
+            shadow_lift_mode: defaults.shadow_lift_mode,
+            shadow_lift_value: defaults.shadow_lift_value,
+            highlight_compression: defaults.highlight_compression,
+            enable_auto_exposure: defaults.enable_auto_exposure,
+            auto_exposure_target_median: defaults.auto_exposure_target_median,
+            auto_exposure_strength: defaults.auto_exposure_strength,
+            auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+            auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+            tone_curve_strength: defaults.tone_curve_strength,
+            skip_tone_curve: defaults.skip_tone_curve,
+            exposure_compensation: defaults.exposure_compensation,
+        }
+    }
+}
+
+impl From<config::TestingGridValues> for ParameterGrid {
+    fn from(values: config::TestingGridValues) -> Self {
+        Self {
+            auto_levels: values.auto_levels,
+            clip_percent: values.clip_percent,
+            auto_color: values.auto_color,
+            auto_color_strength: values.auto_color_strength,
+            auto_color_min_gain: values.auto_color_min_gain,
+            auto_color_max_gain: values.auto_color_max_gain,
+            base_brightest_percent: values.base_brightest_percent,
+            base_sampling_mode: values.base_sampling_mode,
+            inversion_mode: values.inversion_mode,
+            shadow_lift_mode: values.shadow_lift_mode,
+            shadow_lift_value: values.shadow_lift_value,
+            tone_curve_strength: values.tone_curve_strength,
+            exposure_compensation: values.exposure_compensation,
+        }
     }
 }
 
@@ -291,6 +338,8 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
         * grid.clip_percent.len()
         * grid.auto_color.len()
         * grid.auto_color_strength.len()
+        * grid.auto_color_min_gain.len()
+        * grid.auto_color_max_gain.len()
         * grid.base_brightest_percent.len()
         * grid.base_sampling_mode.len()
         * grid.inversion_mode.len()
@@ -309,28 +358,37 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
         for &clip_percent in &grid.clip_percent {
             for &auto_color in &grid.auto_color {
                 for &auto_color_strength in &grid.auto_color_strength {
-                    for &base_brightest_percent in &grid.base_brightest_percent {
-                        for &base_sampling_mode in &grid.base_sampling_mode {
-                            for &inversion_mode in &grid.inversion_mode {
-                                for &shadow_lift_mode in &grid.shadow_lift_mode {
-                                    for &shadow_lift_value in &grid.shadow_lift_value {
-                                        for &tone_curve_strength in &grid.tone_curve_strength {
-                                            for &exposure_compensation in
-                                                &grid.exposure_compensation
-                                            {
-                                                total_tests += 1;
+                    for &auto_color_min_gain in &grid.auto_color_min_gain {
+                        for &auto_color_max_gain in &grid.auto_color_max_gain {
+                            for &base_brightest_percent in &grid.base_brightest_percent {
+                                for &base_sampling_mode in &grid.base_sampling_mode {
+                                    for &inversion_mode in &grid.inversion_mode {
+                                        for &shadow_lift_mode in &grid.shadow_lift_mode {
+                                            for &shadow_lift_value in &grid.shadow_lift_value {
+                                                for &tone_curve_strength in &grid.tone_curve_strength {
+                                                    for &exposure_compensation in
+                                                        &grid.exposure_compensation
+                                                    {
+                                                        total_tests += 1;
 
-                                                let params = ParameterTest {
-                                                    enable_auto_levels: auto_levels,
-                                                    clip_percent,
-                                                    enable_auto_color: auto_color,
-                                                    auto_color_strength,
-                                                    base_brightest_percent,
-                                                    base_sampling_mode,
-                                                    inversion_mode,
-                                                    shadow_lift_mode,
-                                                    shadow_lift_value,
+                                                        let params = ParameterTest {
+                                                            enable_auto_levels: auto_levels,
+                                                            clip_percent,
+                                                            enable_auto_color: auto_color,
+                                                            auto_color_strength,
+                                                            auto_color_min_gain,
+                                                            auto_color_max_gain,
+                                                            base_brightest_percent,
+                                                            base_sampling_mode,
+                                                            inversion_mode,
+                                                            shadow_lift_mode,
+                                                            shadow_lift_value,
                                                     highlight_compression: 1.0,
+                                                    enable_auto_exposure: true,
+                                                    auto_exposure_target_median: 0.25,
+                                                    auto_exposure_strength: 1.0,
+                                                    auto_exposure_min_gain: 0.6,
+                                                    auto_exposure_max_gain: 1.4,
                                                     tone_curve_strength,
                                                     skip_tone_curve: false,
                                                     exposure_compensation,
@@ -356,6 +414,8 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
                                                             "[GRID SEARCH] Test {} failed: {}",
                                                             total_tests, e
                                                         );
+                                                    }
+                                                }
                                                     }
                                                 }
                                             }
@@ -406,8 +466,11 @@ pub fn print_test_result(result: &TestResult, rank: usize) {
         result.params.enable_auto_levels, result.params.clip_percent
     );
     println!(
-        "  Auto Color:         {} (strength: {:.2})",
-        result.params.enable_auto_color, result.params.auto_color_strength
+        "  Auto Color:         {} (strength: {:.2}, range: {:.2}-{:.2})",
+        result.params.enable_auto_color,
+        result.params.auto_color_strength,
+        result.params.auto_color_min_gain,
+        result.params.auto_color_max_gain
     );
     println!(
         "  Base Sampling:      {:?} (top {:.0}%)",
@@ -421,6 +484,14 @@ pub fn print_test_result(result: &TestResult, rank: usize) {
     println!(
         "  Tone Curve:         {} (strength: {:.2})",
         !result.params.skip_tone_curve, result.params.tone_curve_strength
+    );
+    println!(
+        "  Auto Exposure:      {} (target: {:.2}, strength: {:.2}, range: {:.2}-{:.2})",
+        result.params.enable_auto_exposure,
+        result.params.auto_exposure_target_median,
+        result.params.auto_exposure_strength,
+        result.params.auto_exposure_min_gain,
+        result.params.auto_exposure_max_gain
     );
     println!(
         "  Exposure:           {:.2}x",
@@ -485,30 +556,41 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
         for &clip_percent in &grid.clip_percent {
             for &auto_color in &grid.auto_color {
                 for &auto_color_strength in &grid.auto_color_strength {
-                    for &base_brightest_percent in &grid.base_brightest_percent {
-                        for &base_sampling_mode in &grid.base_sampling_mode {
-                            for &inversion_mode in &grid.inversion_mode {
-                                for &shadow_lift_mode in &grid.shadow_lift_mode {
-                                    for &shadow_lift_value in &grid.shadow_lift_value {
-                                        for &tone_curve_strength in &grid.tone_curve_strength {
-                                            for &exposure_compensation in
-                                                &grid.exposure_compensation
-                                            {
-                                                combinations.push(ParameterTest {
-                                                    enable_auto_levels: auto_levels,
-                                                    clip_percent,
-                                                    enable_auto_color: auto_color,
-                                                    auto_color_strength,
-                                                    base_brightest_percent,
-                                                    base_sampling_mode,
-                                                    inversion_mode,
-                                                    shadow_lift_mode,
-                                                    shadow_lift_value,
+                    for &auto_color_min_gain in &grid.auto_color_min_gain {
+                        for &auto_color_max_gain in &grid.auto_color_max_gain {
+                            for &base_brightest_percent in &grid.base_brightest_percent {
+                                for &base_sampling_mode in &grid.base_sampling_mode {
+                                    for &inversion_mode in &grid.inversion_mode {
+                                        for &shadow_lift_mode in &grid.shadow_lift_mode {
+                                            for &shadow_lift_value in &grid.shadow_lift_value {
+                                                for &tone_curve_strength in &grid.tone_curve_strength {
+                                                    for &exposure_compensation in
+                                                        &grid.exposure_compensation
+                                                    {
+                                                        combinations.push(ParameterTest {
+                                                            enable_auto_levels: auto_levels,
+                                                            clip_percent,
+                                                            enable_auto_color: auto_color,
+                                                            auto_color_strength,
+                                                            auto_color_min_gain,
+                                                            auto_color_max_gain,
+                                                            base_brightest_percent,
+                                                            base_sampling_mode,
+                                                            inversion_mode,
+                                                            shadow_lift_mode,
+                                                            shadow_lift_value,
                                                     highlight_compression: 1.0,
+                                                    enable_auto_exposure: true,
+                                                    auto_exposure_target_median: 0.25,
+                                                    auto_exposure_strength: 1.0,
+                                                    auto_exposure_min_gain: 0.6,
+                                                    auto_exposure_max_gain: 1.4,
                                                     tone_curve_strength,
                                                     skip_tone_curve: false,
                                                     exposure_compensation,
                                                 });
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -628,7 +710,9 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
         auto_levels: vec![true],
         clip_percent: vec![0.5, 1.0, 2.0],
         auto_color: vec![true, false],
-        auto_color_strength: vec![0.8],
+        auto_color_strength: vec![0.6, 0.8],
+        auto_color_min_gain: vec![0.7],
+        auto_color_max_gain: vec![1.3],
         base_brightest_percent: vec![10.0, 20.0],
         base_sampling_mode: vec![BaseSamplingMode::Median],
         inversion_mode: vec![InversionMode::Linear],
@@ -686,6 +770,16 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
             ],
             auto_color: vec![best_params.enable_auto_color],
             auto_color_strength: vec![best_params.auto_color_strength],
+            auto_color_min_gain: vec![
+                (best_params.auto_color_min_gain * 0.9).clamp(0.5, 0.9),
+                best_params.auto_color_min_gain,
+                (best_params.auto_color_min_gain * 1.1).clamp(0.5, 1.0),
+            ],
+            auto_color_max_gain: vec![
+                (best_params.auto_color_max_gain * 0.9).clamp(1.0, 1.5),
+                best_params.auto_color_max_gain,
+                (best_params.auto_color_max_gain * 1.1).clamp(1.0, 1.6),
+            ],
             base_brightest_percent: vec![
                 (best_params.base_brightest_percent - 2.0).max(5.0),
                 best_params.base_brightest_percent,

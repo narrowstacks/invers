@@ -4,6 +4,7 @@
 
 pub mod auto_adjust;
 pub mod color;
+pub mod config;
 pub mod decoders;
 pub mod diagnostics;
 pub mod exporters;

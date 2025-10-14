@@ -158,6 +158,14 @@ pub struct ConvertOptions {
     #[serde(default = "default_auto_color_strength")]
     pub auto_color_strength: f32,
 
+    /// Minimum multiplier auto-color will apply to any channel
+    #[serde(default = "default_auto_color_min_gain")]
+    pub auto_color_min_gain: f32,
+
+    /// Maximum multiplier auto-color will apply to any channel
+    #[serde(default = "default_auto_color_max_gain")]
+    pub auto_color_max_gain: f32,
+
     /// Base estimation brightest pixel percentage (1.0-30.0)
     #[serde(default = "default_base_brightest_percent")]
     pub base_brightest_percent: f32,
@@ -181,6 +189,26 @@ pub struct ConvertOptions {
     /// Highlight compression factor (0.0-1.0, 1.0 = no compression)
     #[serde(default = "default_one")]
     pub highlight_compression: f32,
+
+    /// Enable automatic exposure normalization based on scene median
+    #[serde(default = "default_true")]
+    pub enable_auto_exposure: bool,
+
+    /// Target median luminance for auto exposure (0.0-1.0)
+    #[serde(default = "default_auto_exposure_target")]
+    pub auto_exposure_target_median: f32,
+
+    /// Strength of auto exposure adjustment (0.0-1.0)
+    #[serde(default = "default_auto_exposure_strength")]
+    pub auto_exposure_strength: f32,
+
+    /// Minimum gain applied by auto exposure (prevents over-darkening)
+    #[serde(default = "default_auto_exposure_min_gain")]
+    pub auto_exposure_min_gain: f32,
+
+    /// Maximum gain applied by auto exposure (prevents over-brightening)
+    #[serde(default = "default_auto_exposure_max_gain")]
+    pub auto_exposure_max_gain: f32,
 }
 
 // Default value functions for serde
@@ -193,15 +221,23 @@ fn default_false() -> bool {
 }
 
 fn default_clip_percent() -> f32 {
-    1.0
+    0.25
 }
 
 fn default_auto_color_strength() -> f32 {
-    0.8
+    0.6
+}
+
+fn default_auto_color_min_gain() -> f32 {
+    0.7
+}
+
+fn default_auto_color_max_gain() -> f32 {
+    1.3
 }
 
 fn default_base_brightest_percent() -> f32 {
-    10.0
+    5.0
 }
 
 fn default_shadow_lift_value() -> f32 {
@@ -210,6 +246,22 @@ fn default_shadow_lift_value() -> f32 {
 
 fn default_one() -> f32 {
     1.0
+}
+
+fn default_auto_exposure_target() -> f32 {
+    0.25
+}
+
+fn default_auto_exposure_strength() -> f32 {
+    1.0
+}
+
+fn default_auto_exposure_min_gain() -> f32 {
+    0.6
+}
+
+fn default_auto_exposure_max_gain() -> f32 {
+    1.4
 }
 
 /// Output format options

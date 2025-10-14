@@ -2,12 +2,18 @@
 //!
 //! Core pipeline for negative-to-positive conversion.
 
+use crate::config;
 use crate::decoders::DecodedImage;
 use crate::models::{BaseEstimation, ConvertOptions};
 
 /// Prevent values from ever hitting absolute black/white while retaining full range.
 const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
 const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
+
+const MIN_BASE_SAMPLE_FRACTION: f32 = 0.01;
+const MAX_BASE_SAMPLE_FRACTION: f32 = 0.30;
+const BASE_VALIDATION_MIN_BRIGHTNESS: f32 = 0.25;
+const BASE_VALIDATION_MAX_NOISE: f32 = 0.15;
 
 /// Result of the processing pipeline
 pub struct ProcessedImage {
@@ -108,7 +114,13 @@ pub fn process_image(
     // Step 3.2: Apply auto-color (neutralize color casts)
     if options.enable_auto_color {
         let adjustments =
-            crate::auto_adjust::auto_color(&mut data, channels, options.auto_color_strength);
+            crate::auto_adjust::auto_color(
+                &mut data,
+                channels,
+                options.auto_color_strength,
+                options.auto_color_min_gain,
+                options.auto_color_max_gain,
+            );
 
         if options.debug {
             eprintln!(
@@ -126,7 +138,30 @@ pub fn process_image(
         eprintln!("[DEBUG] Auto-color skipped");
     }
 
-    // Step 3.5: Apply exposure compensation if requested
+    // Step 3.3: Normalize exposure based on target median
+    if options.enable_auto_exposure {
+        let gain = crate::auto_adjust::auto_exposure(
+            &mut data,
+            options.auto_exposure_target_median,
+            options.auto_exposure_strength,
+            options.auto_exposure_min_gain,
+            options.auto_exposure_max_gain,
+        );
+
+        if options.debug {
+            let stats = compute_stats(&data);
+            eprintln!(
+                "[DEBUG] Auto exposure (target={:.3}) gain={:.4} - min: {:.6}, max: {:.6}, mean: {:.6}",
+                options.auto_exposure_target_median,
+                gain,
+                stats.0,
+                stats.1,
+                stats.2
+            );
+        }
+    }
+
+    // Step 3.4: Apply exposure compensation if requested
     if (options.exposure_compensation - 1.0).abs() > 0.001 {
         for value in data.iter_mut() {
             let scaled = *value * options.exposure_compensation;
@@ -201,58 +236,208 @@ pub fn estimate_base(
     image: &DecodedImage,
     roi: Option<(u32, u32, u32, u32)>,
 ) -> Result<BaseEstimation, String> {
-    // If no ROI provided, use auto-estimation heuristic
-    let roi_rect = match roi {
-        Some(r) => r,
-        None => estimate_base_roi(image)?,
+    let sample_fraction = base_sample_fraction();
+
+    let mut candidates = if let Some(rect) = roi {
+        vec![BaseRoiCandidate::from_manual_roi(image, rect)]
+    } else {
+        estimate_base_roi_candidates(image)
     };
 
-    let (x, y, width, height) = roi_rect;
-
-    // Validate ROI bounds
-    if x + width > image.width || y + height > image.height {
-        return Err(format!(
-            "ROI out of bounds: ({}, {}, {}, {}) exceeds image size {}x{}",
-            x, y, width, height, image.width, image.height
-        ));
+    if candidates.is_empty() {
+        return Err("Failed to determine film base ROI".to_string());
     }
 
-    if width == 0 || height == 0 {
-        return Err("ROI width and height must be greater than 0".to_string());
+    if roi.is_none() {
+        candidates.sort_by(|a, b| b
+            .brightness
+            .partial_cmp(&a.brightness)
+            .unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    // Extract ROI pixels
-    let roi_pixels = extract_roi_pixels(image, x, y, width, height);
+    let mut fallback: Option<BaseEstimation> = None;
 
-    // Compute per-channel medians from the BRIGHTEST pixels in ROI
-    // For color negatives, the film base is the clearest (brightest) area
-    // Taking top 10% of pixels avoids contamination from image content
-    let num_brightest = ((roi_pixels.len() as f32 * 0.10).ceil() as usize).max(10);
-    let percentage = (num_brightest as f32 / roi_pixels.len() as f32 * 100.0).round();
+    for candidate in &candidates {
+        let (x, y, width, height) = candidate.rect;
 
-    eprintln!(
-        "[BASE] ROI: {} total pixels, using {} brightest ({}%)",
-        roi_pixels.len(),
-        num_brightest,
-        percentage
-    );
+        if x + width > image.width || y + height > image.height || width == 0 || height == 0 {
+            eprintln!(
+                "[BASE] Skipping {} candidate: ROI out of bounds ({}x{} at {}, {})",
+                candidate.label, width, height, x, y
+            );
+            continue;
+        }
 
-    let medians = compute_channel_medians_from_brightest(&roi_pixels, num_brightest);
+        let roi_pixels = extract_roi_pixels(image, x, y, width, height);
+        if roi_pixels.is_empty() {
+            eprintln!("[BASE] Skipping {} candidate: ROI is empty", candidate.label);
+            continue;
+        }
 
-    // Calculate noise statistics (standard deviation per channel)
-    let noise_stats = compute_noise_stats(&roi_pixels, &medians);
+        let (num_brightest, percentage, medians, noise_stats) =
+            compute_base_stats(&roi_pixels, sample_fraction);
 
-    eprintln!(
-        "[BASE] Detected base RGB: [{:.6}, {:.6}, {:.6}]",
-        medians[0], medians[1], medians[2]
-    );
+        eprintln!(
+            "[BASE] Candidate {:>6} | brightness={:.4} | using {} px ({:.1}%)",
+            candidate.label, candidate.brightness, num_brightest, percentage
+        );
+        eprintln!(
+            "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
+            medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+        );
 
-    Ok(BaseEstimation {
-        roi: Some(roi_rect),
-        medians,
-        noise_stats: Some(noise_stats),
-        auto_estimated: roi.is_none(),
-    })
+        let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
+
+        if valid {
+            eprintln!("[BASE]   -> accepted {} candidate", candidate.label);
+            return Ok(BaseEstimation {
+                roi: Some(candidate.rect),
+                medians,
+                noise_stats: Some(noise_stats),
+                auto_estimated: roi.is_none(),
+            });
+        } else {
+            eprintln!("[BASE]   -> rejected: {}", reason);
+            if fallback.is_none() {
+                fallback = Some(BaseEstimation {
+                    roi: Some(candidate.rect),
+                    medians,
+                    noise_stats: Some(noise_stats),
+                    auto_estimated: roi.is_none(),
+                });
+            }
+
+            if candidate.manual {
+                eprintln!("[BASE]   -> manual ROI provided; using despite warnings");
+                return Ok(BaseEstimation {
+                    roi: Some(candidate.rect),
+                    medians,
+                    noise_stats: Some(noise_stats),
+                    auto_estimated: false,
+                });
+            }
+        }
+    }
+
+    if let Some(estimation) = fallback {
+        if let Some(rect) = estimation.roi {
+            if let Some(candidate) = candidates.iter().find(|c| c.rect == rect) {
+                eprintln!(
+                    "[BASE] All auto candidates rejected; falling back to {} (brightness {:.4})",
+                    candidate.label, candidate.brightness
+                );
+            } else {
+                eprintln!("[BASE] All auto candidates rejected; using brightest ROI");
+            }
+        }
+        Ok(estimation)
+    } else {
+        Err("Unable to derive film base from available regions".to_string())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BaseRoiCandidate {
+    rect: (u32, u32, u32, u32),
+    brightness: f32,
+    label: &'static str,
+    manual: bool,
+}
+
+impl BaseRoiCandidate {
+    fn new(rect: (u32, u32, u32, u32), brightness: f32, label: &'static str) -> Self {
+        Self {
+            rect,
+            brightness,
+            label,
+            manual: false,
+        }
+    }
+
+    fn from_manual_roi(image: &DecodedImage, rect: (u32, u32, u32, u32)) -> Self {
+        let brightness = sample_region_brightness(image, rect.0, rect.1, rect.2, rect.3);
+        Self {
+            rect,
+            brightness,
+            label: "manual",
+            manual: true,
+        }
+    }
+}
+
+fn base_sample_fraction() -> f32 {
+    let defaults = &config::pipeline_config_handle().config.defaults;
+    let fraction = defaults.base_brightest_percent / 100.0;
+    fraction.clamp(MIN_BASE_SAMPLE_FRACTION, MAX_BASE_SAMPLE_FRACTION)
+}
+
+fn compute_base_stats(
+    roi_pixels: &[[f32; 3]],
+    fraction: f32,
+) -> (usize, f32, [f32; 3], [f32; 3]) {
+    let mut num_brightest = (roi_pixels.len() as f32 * fraction).ceil() as usize;
+    num_brightest = num_brightest.max(10).min(roi_pixels.len());
+    let percentage =
+        ((num_brightest as f32 / roi_pixels.len() as f32) * 100.0 * 10.0).round() / 10.0;
+
+    let medians = compute_channel_medians_from_brightest(roi_pixels, num_brightest);
+    let noise_stats = compute_noise_stats(roi_pixels, &medians);
+
+    (num_brightest, percentage, medians, noise_stats)
+}
+
+fn validate_base_candidate(
+    medians: &[f32; 3],
+    noise: &[f32; 3],
+    brightness: f32,
+) -> (bool, String) {
+    let [r, g, b] = *medians;
+    let max_noise = noise.iter().cloned().fold(0.0, f32::max);
+
+    if brightness < BASE_VALIDATION_MIN_BRIGHTNESS {
+        return (
+            false,
+            format!("brightness {:.3} < {:.3}", brightness, BASE_VALIDATION_MIN_BRIGHTNESS),
+        );
+    }
+
+    if max_noise > BASE_VALIDATION_MAX_NOISE {
+        return (
+            false,
+            format!("noise {:.4} exceeds {:.4}", max_noise, BASE_VALIDATION_MAX_NOISE),
+        );
+    }
+
+    if !(r.is_finite() && g.is_finite() && b.is_finite()) {
+        return (false, "median contains non-finite values".to_string());
+    }
+
+    if r <= 0.0 || g <= 0.0 || b <= 0.0 {
+        return (false, "median channel <= 0".to_string());
+    }
+
+    let rg_ratio = r / g;
+    let gb_ratio = g / b;
+
+    if !(0.70..=2.20).contains(&rg_ratio) {
+        return (
+            false,
+            format!("R/G ratio {:.3} outside expected range 0.70-2.20", rg_ratio),
+        );
+    }
+
+    if !(1.00..=2.50).contains(&gb_ratio) {
+        return (
+            false,
+            format!("G/B ratio {:.3} outside expected range 1.00-2.50", gb_ratio),
+        );
+    }
+
+    if r < g || g < b {
+        return (false, "channel ordering not orange-mask like (R >= G >= B expected)".to_string());
+    }
+
+    (true, "within expected range".to_string())
 }
 
 /// Extract pixels from a region of interest
@@ -360,44 +545,15 @@ fn compute_noise_stats(pixels: &[[f32; 3]], medians: &[f32; 3]) -> [f32; 3] {
     [var_r.sqrt(), var_g.sqrt(), var_b.sqrt()]
 }
 
-/// Estimate film base ROI automatically using heuristics
-/// For color negatives, looks for high-value (bright orange) regions
-/// For B&W, looks for high-value regions
-fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), String> {
-    // Simple heuristic: sample the border regions (top, bottom, left, right)
-    // and find the brightest region, which typically corresponds to film base
-
+/// Estimate film base ROI candidates automatically using heuristics.
+/// Order is determined later based on brightness.
+fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
     let border_width = (image.width / 20).max(50).min(200);
     let border_height = (image.height / 20).max(50).min(200);
 
-    // Sample top border
-    let top_brightness = sample_region_brightness(image, 0, 0, image.width, border_height);
-
-    // Sample bottom border
-    let bottom_brightness = sample_region_brightness(
-        image,
-        0,
-        image.height.saturating_sub(border_height),
-        image.width,
-        border_height,
-    );
-
-    // Sample left border
-    let left_brightness = sample_region_brightness(image, 0, 0, border_width, image.height);
-
-    // Sample right border
-    let right_brightness = sample_region_brightness(
-        image,
-        image.width.saturating_sub(border_width),
-        0,
-        border_width,
-        image.height,
-    );
-
-    // Find brightest region
-    let regions = [
+    let candidates = [
         (
-            top_brightness,
+            sample_region_brightness(image, 0, 0, image.width, border_height),
             (
                 border_width,
                 0,
@@ -407,7 +563,13 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
             "top",
         ),
         (
-            bottom_brightness,
+            sample_region_brightness(
+                image,
+                0,
+                image.height.saturating_sub(border_height),
+                image.width,
+                border_height,
+            ),
             (
                 border_width,
                 image.height.saturating_sub(border_height),
@@ -417,7 +579,7 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
             "bottom",
         ),
         (
-            left_brightness,
+            sample_region_brightness(image, 0, 0, border_width, image.height),
             (
                 0,
                 border_height,
@@ -427,7 +589,13 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
             "left",
         ),
         (
-            right_brightness,
+            sample_region_brightness(
+                image,
+                image.width.saturating_sub(border_width),
+                0,
+                border_width,
+                image.height,
+            ),
             (
                 image.width.saturating_sub(border_width),
                 border_height,
@@ -440,20 +608,13 @@ fn estimate_base_roi(image: &DecodedImage) -> Result<(u32, u32, u32, u32), Strin
 
     eprintln!(
         "[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
-        top_brightness, bottom_brightness, left_brightness, right_brightness
+        candidates[0].0, candidates[1].0, candidates[2].0, candidates[3].0
     );
 
-    let (brightness, roi, location) = regions
+    candidates
         .iter()
-        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-        .ok_or("Failed to determine auto ROI".to_string())?;
-
-    eprintln!(
-        "[BASE] Selected {} border (brightness={:.4}) as ROI",
-        location, brightness
-    );
-
-    Ok(*roi)
+        .map(|(brightness, rect, label)| BaseRoiCandidate::new(*rect, *brightness, label))
+        .collect()
 }
 
 /// Sample the average brightness of a region with color-aware weighting
