@@ -1,12 +1,12 @@
 [package]
-name = "positize-gui"
+name = "invers-gui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
-positize-core = { path = "../positize-core" }
+invers-core = { path = "../invers-core" }
 
 # GUI framework
 eframe = "0.30"

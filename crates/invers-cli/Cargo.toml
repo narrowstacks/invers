@@ -1,5 +1,5 @@
 [package]
-name = "positize-cli"
+name = "invers-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,5 +7,5 @@ license.workspace = true
 
 [dependencies]
 clap = { version = "4.5.48", features = ["derive"] }
-positize-core = { path = "../positize-core" }
+invers-core = { path = "../invers-core" }
 serde_json = "1.0.145"

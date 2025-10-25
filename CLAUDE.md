@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Positize is a film negative to positive conversion tool written in Rust. It processes scanned film negatives (color and B&W) and converts them to positive images while applying film-specific corrections, tone curves, and color matrices.
+Invers is a film negative to positive conversion tool written in Rust. It processes scanned film negatives (color and B&W) and converts them to positive images while applying film-specific corrections, tone curves, and color matrices.
 
 The project is in early development with most core functionality stubbed out but the architecture defined.
 
@@ -12,19 +12,19 @@ The project is in early development with most core functionality stubbed out but
 
 This is a Cargo workspace with three crates:
 
-- **positize-core**: Core library containing all conversion logic, models, and utilities
+- **invers-core**: Core library containing all conversion logic, models, and utilities
   - Image decoders (TIFF, PNG, planned RAW support)
   - Processing pipeline (base estimation, inversion, tone mapping, color correction)
   - Exporters (TIFF16, Linear DNG)
   - Preset and profile management (YAML-based)
   - Data models for film presets, scan profiles, and conversion options
 
-- **positize-cli**: Command-line interface
+- **invers-cli**: Command-line interface
   - Built with clap (derive API)
   - Commands: convert, analyze-base, batch, preset (list/show/create)
   - Most commands are currently unimplemented stubs
 
-- **positize-gui**: Qt-based GUI (planned for M2)
+- **invers-gui**: Qt-based GUI (planned for M2)
   - Currently a scaffold showing intended architecture
   - Will use cxx-qt for Rust/Qt integration
   - Modules: app_state, preview, roi_tool, ui, viewer
@@ -39,13 +39,13 @@ cargo build
 cargo build --release
 
 # Build specific crate
-cargo build -p positize-cli
-cargo build -p positize-core
-cargo build -p positize-gui
+cargo build -p invers-cli
+cargo build -p invers-core
+cargo build -p invers-gui
 
 # Run CLI (after building)
-./target/release/positize-cli --help
-./target/release/positize-cli convert --help
+./target/release/invers-cli --help
+./target/release/invers-cli convert --help
 
 # Check code without building
 cargo check
@@ -64,21 +64,21 @@ cargo clippy
 
 ### Processing Pipeline Flow
 
-The conversion pipeline (crates/positize-core/src/pipeline.rs) follows these stages:
+The conversion pipeline (crates/invers-core/src/pipeline.rs) follows these stages:
 
-1. **Decode**: Load image from TIFF/PNG/RAW (crates/positize-core/src/decoders.rs)
+1. **Decode**: Load image from TIFF/PNG/RAW (crates/invers-core/src/decoders.rs)
 2. **Base Estimation**: Calculate film base color from ROI or auto-detection
 3. **Base Subtraction & Inversion**: Subtract base, invert to positive (1.0 - negative)
 4. **Tone Mapping**: Apply film-specific tone curves
 5. **Color Correction**: Apply 3x3 color matrices
 6. **Colorspace Transform**: Convert to output colorspace (linear-rec2020 default)
-7. **Export**: Write to TIFF16 or Linear DNG (crates/positize-core/src/exporters.rs)
+7. **Export**: Write to TIFF16 or Linear DNG (crates/invers-core/src/exporters.rs)
 
 All pipeline functions are currently stubs returning "not yet implemented" errors.
 
 ### Data Models
 
-Core data structures (crates/positize-core/src/models.rs):
+Core data structures (crates/invers-core/src/models.rs):
 
 - **FilmPreset**: Film-specific parameters (base_offsets, color_matrix, tone_curve)
 - **ScanProfile**: Capture source characteristics (source_type, white_level, black_level, demosaic/WB hints)
@@ -89,9 +89,9 @@ Core data structures (crates/positize-core/src/models.rs):
 
 ### Preset Management
 
-Presets are YAML files managed via crates/positize-core/src/presets.rs:
+Presets are YAML files managed via crates/invers-core/src/presets.rs:
 
-- Film presets: `~/.config/positize/presets/` (or `profiles/film/` in repo)
+- Film presets: `~/.config/invers/presets/` (or `profiles/film/` in repo)
 - Scan profiles: stored alongside film presets
 - Functions: load, save, list presets
 

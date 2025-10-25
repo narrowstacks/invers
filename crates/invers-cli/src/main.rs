@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "positize")]
+#[command(name = "invers")]
 #[command(version, about = "Film negative to positive converter", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -361,15 +361,15 @@ fn cmd_convert(
     exposure: f32,
     debug: bool,
 ) -> Result<(), String> {
-    positize_core::config::log_config_usage();
-    let config_handle = positize_core::config::pipeline_config_handle();
+    invers_core::config::log_config_usage();
+    let config_handle = invers_core::config::pipeline_config_handle();
     let defaults = config_handle.config.defaults.clone();
 
     println!("Converting {} to positive...", input.display());
 
     // Decode input image
     println!("Decoding image...");
-    let decoded = positize_core::decoders::decode_image(&input)?;
+    let decoded = invers_core::decoders::decode_image(&input)?;
     println!(
         "  Image: {}x{}, {} channels",
         decoded.width, decoded.height, decoded.channels
@@ -384,7 +384,7 @@ fn cmd_convert(
 
     // Estimate or load base
     println!("Estimating film base...");
-    let base_estimation = positize_core::pipeline::estimate_base(&decoded, roi_rect)?;
+    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect)?;
     println!(
         "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
@@ -399,7 +399,7 @@ fn cmd_convert(
     // Load film preset if provided
     let film_preset = if let Some(preset_path) = preset {
         println!("Loading film preset from {}...", preset_path.display());
-        Some(positize_core::presets::load_film_preset(&preset_path)?)
+        Some(invers_core::presets::load_film_preset(&preset_path)?)
     } else {
         None
     };
@@ -410,13 +410,13 @@ fn cmd_convert(
 
     // Parse output format
     let output_format = match export.as_str() {
-        "tiff16" | "tiff" => positize_core::models::OutputFormat::Tiff16,
-        "dng" => positize_core::models::OutputFormat::LinearDng,
+        "tiff16" | "tiff" => invers_core::models::OutputFormat::Tiff16,
+        "dng" => invers_core::models::OutputFormat::LinearDng,
         _ => return Err(format!("Unknown export format: {}", export)),
     };
 
     // Build conversion options
-    let options = positize_core::models::ConvertOptions {
+    let options = invers_core::models::ConvertOptions {
         input_paths: vec![input.clone()],
         output_dir: output_path
             .parent()
@@ -424,7 +424,7 @@ fn cmd_convert(
             .to_path_buf(),
         output_format,
         working_colorspace: colorspace.clone(),
-        bit_depth_policy: positize_core::models::BitDepthPolicy::Force16Bit,
+        bit_depth_policy: invers_core::models::BitDepthPolicy::Force16Bit,
         film_preset,
         scan_profile: None,
         base_estimation: Some(base_estimation),
@@ -454,22 +454,22 @@ fn cmd_convert(
 
     // Process image
     println!("Processing image...");
-    let processed = positize_core::pipeline::process_image(decoded, &options)?;
+    let processed = invers_core::pipeline::process_image(decoded, &options)?;
 
     // Export
     println!(
         "Exporting to {}...",
-        if output_format == positize_core::models::OutputFormat::Tiff16 {
+        if output_format == invers_core::models::OutputFormat::Tiff16 {
             "TIFF16"
         } else {
             "DNG"
         }
     );
     match output_format {
-        positize_core::models::OutputFormat::Tiff16 => {
-            positize_core::exporters::export_tiff16(&processed, &output_path, None)?;
+        invers_core::models::OutputFormat::Tiff16 => {
+            invers_core::exporters::export_tiff16(&processed, &output_path, None)?;
         }
-        positize_core::models::OutputFormat::LinearDng => {
+        invers_core::models::OutputFormat::LinearDng => {
             return Err("Linear DNG export not yet implemented for M1".to_string());
         }
     }
@@ -487,7 +487,7 @@ fn cmd_analyze_base(
     println!("Analyzing film base from {}...", input.display());
 
     // Decode input image
-    let decoded = positize_core::decoders::decode_image(&input)?;
+    let decoded = invers_core::decoders::decode_image(&input)?;
     println!(
         "Image: {}x{}, {} channels",
         decoded.width, decoded.height, decoded.channels
@@ -504,7 +504,7 @@ fn cmd_analyze_base(
     };
 
     // Estimate base
-    let base_estimation = positize_core::pipeline::estimate_base(&decoded, roi_rect)?;
+    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect)?;
 
     // Print results
     println!("\nFilm Base Estimation:");
@@ -614,11 +614,11 @@ fn cmd_batch(
 
 fn cmd_preset_list(_dir: Option<PathBuf>) -> Result<(), String> {
     let dir = _dir.unwrap_or_else(|| {
-        positize_core::presets::get_presets_dir().unwrap_or_else(|_| PathBuf::from("profiles/film"))
+        invers_core::presets::get_presets_dir().unwrap_or_else(|_| PathBuf::from("profiles/film"))
     });
 
     println!("Listing presets in: {}", dir.display());
-    match positize_core::presets::list_film_presets(&dir) {
+    match invers_core::presets::list_film_presets(&dir) {
         Ok(presets) => {
             if presets.is_empty() {
                 println!("No presets found.");
@@ -654,17 +654,17 @@ fn cmd_diagnose(
     exposure: f32,
     debug: bool,
 ) -> Result<(), String> {
-    positize_core::config::log_config_usage();
-    let config_handle = positize_core::config::pipeline_config_handle();
+    invers_core::config::log_config_usage();
+    let config_handle = invers_core::config::pipeline_config_handle();
     let defaults = config_handle.config.defaults.clone();
 
     println!("========================================");
-    println!("POSITIZE DIAGNOSTIC COMPARISON");
+    println!("INVERS DIAGNOSTIC COMPARISON");
     println!("========================================\n");
 
     // Step 1: Decode original negative
     println!("1. Loading original negative: {}", original.display());
-    let decoded_original = positize_core::decoders::decode_image(&original)?;
+    let decoded_original = invers_core::decoders::decode_image(&original)?;
     println!(
         "   Dimensions: {}x{}, {} channels",
         decoded_original.width, decoded_original.height, decoded_original.channels
@@ -675,7 +675,7 @@ fn cmd_diagnose(
         "\n2. Loading third-party conversion: {}",
         third_party.display()
     );
-    let decoded_third_party = positize_core::decoders::decode_image(&third_party)?;
+    let decoded_third_party = invers_core::decoders::decode_image(&third_party)?;
     println!(
         "   Dimensions: {}x{}, {} channels",
         decoded_third_party.width, decoded_third_party.height, decoded_third_party.channels
@@ -703,7 +703,7 @@ fn cmd_diagnose(
     } else {
         None
     };
-    let base_estimation = positize_core::pipeline::estimate_base(&decoded_original, roi_rect)?;
+    let base_estimation = invers_core::pipeline::estimate_base(&decoded_original, roi_rect)?;
     println!(
         "   Base RGB: [{:.6}, {:.6}, {:.6}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
@@ -712,7 +712,7 @@ fn cmd_diagnose(
     // Step 4: Load film preset if provided
     let film_preset = if let Some(preset_path) = preset {
         println!("\n4. Loading film preset: {}", preset_path.display());
-        Some(positize_core::presets::load_film_preset(&preset_path)?)
+        Some(invers_core::presets::load_film_preset(&preset_path)?)
     } else {
         println!("\n4. No film preset specified, using default processing");
         None
@@ -720,12 +720,12 @@ fn cmd_diagnose(
 
     // Step 5: Process with our pipeline
     println!("\n5. Processing with our pipeline...");
-    let options = positize_core::models::ConvertOptions {
+    let options = invers_core::models::ConvertOptions {
         input_paths: vec![original.clone()],
         output_dir: std::path::PathBuf::from("."),
-        output_format: positize_core::models::OutputFormat::Tiff16,
+        output_format: invers_core::models::OutputFormat::Tiff16,
         working_colorspace: "linear-rec2020".to_string(),
-        bit_depth_policy: positize_core::models::BitDepthPolicy::Force16Bit,
+        bit_depth_policy: invers_core::models::BitDepthPolicy::Force16Bit,
         film_preset,
         scan_profile: None,
         base_estimation: Some(base_estimation),
@@ -753,17 +753,17 @@ fn cmd_diagnose(
         auto_exposure_max_gain: defaults.auto_exposure_max_gain,
     };
 
-    let our_processed = positize_core::pipeline::process_image(decoded_original, &options)?;
+    let our_processed = invers_core::pipeline::process_image(decoded_original, &options)?;
     println!("   Processing complete!");
 
     // Step 6: Compare conversions
     println!("\n6. Performing diagnostic comparison...");
     let report =
-        positize_core::diagnostics::compare_conversions(&our_processed, &decoded_third_party)?;
+        invers_core::diagnostics::compare_conversions(&our_processed, &decoded_third_party)?;
 
     // Step 7: Print report
     println!();
-    positize_core::diagnostics::print_report(&report);
+    invers_core::diagnostics::print_report(&report);
 
     // Step 8: Save diagnostic images
     let output_dir = out.unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -775,7 +775,7 @@ fn cmd_diagnose(
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    positize_core::diagnostics::save_diagnostic_images(
+    invers_core::diagnostics::save_diagnostic_images(
         &our_processed,
         &decoded_third_party,
         &output_dir,
@@ -803,7 +803,7 @@ fn cmd_test_params(
     tone_strength: Option<f32>,
     exposure: Option<f32>,
 ) -> Result<(), String> {
-    positize_core::config::log_config_usage();
+    invers_core::config::log_config_usage();
     println!("========================================");
     println!("PARAMETER TESTING & OPTIMIZATION");
     println!("========================================\n");
@@ -815,7 +815,7 @@ fn cmd_test_params(
     let results = if adaptive {
         // Adaptive search (most efficient)
         println!("Running adaptive parameter search...\n");
-        positize_core::testing::run_adaptive_grid_search(
+        invers_core::testing::run_adaptive_grid_search(
             &original,
             &reference,
             target_score,
@@ -823,11 +823,11 @@ fn cmd_test_params(
         )?
     } else if grid {
         // Grid search (exhaustive or parallel)
-        let grid_config = positize_core::testing::ParameterGrid::default();
+        let grid_config = invers_core::testing::ParameterGrid::default();
 
         if parallel {
             println!("Running parallel grid search...\n");
-            positize_core::testing::run_parameter_grid_search_parallel(
+            invers_core::testing::run_parameter_grid_search_parallel(
                 &original,
                 &reference,
                 &grid_config,
@@ -835,13 +835,13 @@ fn cmd_test_params(
             )?
         } else {
             println!("Running sequential grid search...\n");
-            positize_core::testing::run_parameter_grid_search(&original, &reference, &grid_config)?
+            invers_core::testing::run_parameter_grid_search(&original, &reference, &grid_config)?
         }
     } else if clip_percent.is_some() || tone_strength.is_some() || exposure.is_some() {
         // Single test with specific parameters
         println!("Testing specific parameters...\n");
 
-        let mut params = positize_core::testing::ParameterTest::default();
+        let mut params = invers_core::testing::ParameterTest::default();
 
         if let Some(clip) = clip_percent {
             params.clip_percent = clip;
@@ -853,7 +853,7 @@ fn cmd_test_params(
             params.exposure_compensation = exp;
         }
 
-        let result = positize_core::testing::run_parameter_test(
+        let result = invers_core::testing::run_parameter_test(
             &original,
             &reference,
             &params,
@@ -864,8 +864,8 @@ fn cmd_test_params(
         // Default: test current default parameters
         println!("Testing default parameters...\n");
 
-        let params = positize_core::testing::ParameterTest::default();
-        let result = positize_core::testing::run_parameter_test(
+        let params = invers_core::testing::ParameterTest::default();
+        let result = invers_core::testing::run_parameter_test(
             &original,
             &reference,
             &params,
@@ -881,7 +881,7 @@ fn cmd_test_params(
     println!("{:=<80}", "");
 
     for (i, result) in results.iter().take(num_to_show).enumerate() {
-        positize_core::testing::print_test_result(result, i + 1);
+        invers_core::testing::print_test_result(result, i + 1);
     }
 
     // Save to JSON if requested

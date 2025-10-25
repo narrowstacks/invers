@@ -1,6 +1,6 @@
-# Positize GUI
+# Invers GUI
 
-Qt-based graphical interface for Positize using cxx-qt.
+Qt-based graphical interface for Invers using cxx-qt.
 
 ## Status
 
@@ -28,7 +28,7 @@ Qt-based graphical interface for Positize using cxx-qt.
 2. Create cxx-qt bridge in `src/ui.rs` using `#[cxx_qt::bridge]` macro
 3. Implement QObject wrappers for Rust state
 4. Connect QML UI to Rust backend via signals/slots
-5. Integrate with positize-core processing pipeline
+5. Integrate with invers-core processing pipeline
 6. Implement preview renderer with background updates
 7. Add file dialog integration
 8. Implement batch processing UI with progress tracking

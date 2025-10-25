@@ -3,7 +3,7 @@
 //! Central state for the GUI application, managing loaded images,
 //! current settings, and processing state.
 
-use positize_core::{BaseEstimation, FilmPreset, ScanProfile};
+use invers_core::{BaseEstimation, FilmPreset, ScanProfile};
 use std::path::PathBuf;
 
 /// Main application state

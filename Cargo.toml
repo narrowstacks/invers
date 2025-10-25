@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/positize-core",
-    "crates/positize-cli",
-    "crates/positize-gui",
+    "crates/invers-core",
+    "crates/invers-cli",
+    "crates/invers-gui",
 ]
 resolver = "2"
 

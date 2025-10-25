@@ -390,7 +390,7 @@ pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle 
         candidates.push(path.to_path_buf());
     }
 
-    if let Ok(env_path) = std::env::var("POSITIZE_CONFIG") {
+    if let Ok(env_path) = std::env::var("INVERS_CONFIG") {
         candidates.push(PathBuf::from(env_path));
     }
 
@@ -403,7 +403,7 @@ pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle 
 
     if let Some(config_dir) = dirs::config_dir() {
         for name in CONFIG_FILENAMES {
-            candidates.push(config_dir.join("positize").join(name));
+            candidates.push(config_dir.join("invers").join(name));
         }
     }
 
@@ -450,13 +450,13 @@ pub fn log_config_usage() {
     PRINT_CONFIG_ONCE.call_once(|| {
         let handle = pipeline_config_handle();
         if let Some(source) = &handle.source {
-            eprintln!("[positize] Loaded pipeline config from {}", source.display());
+            eprintln!("[invers] Loaded pipeline config from {}", source.display());
         } else {
-            eprintln!("[positize] Using built-in pipeline defaults");
+            eprintln!("[invers] Using built-in pipeline defaults");
         }
 
         for warning in &handle.warnings {
-            eprintln!("[positize] Config warning: {}", warning);
+            eprintln!("[invers] Config warning: {}", warning);
         }
     });
 }

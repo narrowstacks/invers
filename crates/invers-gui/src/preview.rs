@@ -2,7 +2,7 @@
 //!
 //! Real-time preview generation at reduced resolution.
 
-use positize_core::{BaseEstimation, FilmPreset};
+use invers_core::{BaseEstimation, FilmPreset};
 
 /// Preview renderer
 pub struct PreviewRenderer {
@@ -39,7 +39,7 @@ impl PreviewRenderer {
 
     /// Render preview with current settings
     ///
-    /// TODO: In M2, integrate with positize_core pipeline
+    /// TODO: In M2, integrate with invers_core pipeline
     /// - Load image at reduced resolution
     /// - Apply base estimation and preset
     /// - Render to display buffer

@@ -3,7 +3,7 @@
 //! Interactive GUI for film negative to positive conversion using egui.
 
 use eframe::egui;
-use positize_core::{
+use invers_core::{
     decoders::{decode_image, DecodedImage},
     models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams},
     pipeline::{estimate_base, process_image, ProcessedImage},
@@ -14,18 +14,18 @@ fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 800.0])
-            .with_title("Positize - Film Negative Converter"),
+            .with_title("Invers - Film Negative Converter"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Positize",
+        "Invers",
         options,
-        Box::new(|_cc| Ok(Box::new(PositizeApp::default()))),
+        Box::new(|_cc| Ok(Box::new(InversApp::default()))),
     )
 }
 
-struct PositizeApp {
+struct InversApp {
     // Image data
     loaded_image: Option<DecodedImage>,
     preview_image: Option<DecodedImage>, // Downsampled for fast preview
@@ -65,7 +65,7 @@ struct PositizeApp {
     white_balance_mode: bool,
 }
 
-impl Default for PositizeApp {
+impl Default for InversApp {
     fn default() -> Self {
         Self {
             loaded_image: None,
@@ -104,7 +104,7 @@ impl Default for PositizeApp {
     }
 }
 
-impl eframe::App for PositizeApp {
+impl eframe::App for InversApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -184,7 +184,7 @@ impl eframe::App for PositizeApp {
     }
 }
 
-impl PositizeApp {
+impl InversApp {
     fn load_image(&mut self, path: PathBuf) {
         match decode_image(&path) {
             Ok(image) => {
@@ -277,7 +277,7 @@ impl PositizeApp {
         };
 
         // Build convert options
-        let defaults = positize_core::config::pipeline_config_handle()
+        let defaults = invers_core::config::pipeline_config_handle()
             .config
             .defaults
             .clone();
@@ -285,9 +285,9 @@ impl PositizeApp {
         let options = ConvertOptions {
             input_paths: vec![],
             output_dir: PathBuf::from("."),
-            output_format: positize_core::models::OutputFormat::Tiff16,
+            output_format: invers_core::models::OutputFormat::Tiff16,
             working_colorspace: "linear-rec2020".to_string(),
-            bit_depth_policy: positize_core::models::BitDepthPolicy::MatchInput,
+            bit_depth_policy: invers_core::models::BitDepthPolicy::MatchInput,
             film_preset: Some(preset),
             scan_profile: None,
             base_estimation: Some(base),

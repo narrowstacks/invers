@@ -1907,6 +1907,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "invers-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "invers-core",
+ "serde_json",
+]
+
+[[package]]
+name = "invers-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "image",
+ "kamadak-exif",
+ "ndarray",
+ "png",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tiff",
+]
+
+[[package]]
+name = "invers-gui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "image",
+ "invers-core",
+ "rfd",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2859,42 +2895,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
-]
-
-[[package]]
-name = "positize-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "positize-core",
- "serde_json",
-]
-
-[[package]]
-name = "positize-core"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "image",
- "kamadak-exif",
- "ndarray",
- "png",
- "rayon",
- "serde",
- "serde_json",
- "serde_yaml",
- "tiff",
-]
-
-[[package]]
-name = "positize-gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "image",
- "positize-core",
- "rfd",
 ]
 
 [[package]]

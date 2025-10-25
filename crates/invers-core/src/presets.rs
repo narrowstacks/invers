@@ -70,7 +70,7 @@ pub fn get_presets_dir() -> Result<std::path::PathBuf, String> {
     let config_dir =
         dirs::config_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
 
-    let presets_dir = config_dir.join("positize").join("presets");
+    let presets_dir = config_dir.join("invers").join("presets");
 
     // Create directory if it doesn't exist
     if !presets_dir.exists() {
