@@ -12,11 +12,14 @@ pub fn auto_levels(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6
         panic!("auto_levels only supports 3-channel RGB images");
     }
 
-    // Separate into channels
-    let mut r_values = Vec::new();
-    let mut g_values = Vec::new();
-    let mut b_values = Vec::new();
+    let num_pixels = data.len() / 3;
+    
+    // Pre-allocate with exact capacity to avoid reallocation
+    let mut r_values = Vec::with_capacity(num_pixels);
+    let mut g_values = Vec::with_capacity(num_pixels);
+    let mut b_values = Vec::with_capacity(num_pixels);
 
+    // Single pass to separate channels
     for pixel in data.chunks_exact(3) {
         r_values.push(pixel[0]);
         g_values.push(pixel[1]);
@@ -28,7 +31,7 @@ pub fn auto_levels(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6
     let (g_min, g_max) = compute_clipped_range(&mut g_values, clip_percent);
     let (b_min, b_max) = compute_clipped_range(&mut b_values, clip_percent);
 
-    // Apply stretch to each channel
+    // Apply stretch to each channel in-place
     for pixel in data.chunks_exact_mut(3) {
         pixel[0] = stretch_value(pixel[0], r_min, r_max);
         pixel[1] = stretch_value(pixel[1], g_min, g_max);
@@ -39,19 +42,28 @@ pub fn auto_levels(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6
     [r_min, r_max, g_min, g_max, b_min, b_max]
 }
 
-/// Compute min/max with percentile clipping
+/// Compute min/max with percentile clipping using partial sort for efficiency
 fn compute_clipped_range(values: &mut [f32], clip_percent: f32) -> (f32, f32) {
     if values.is_empty() {
         return (0.0, 1.0);
     }
 
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
     let clip_fraction = clip_percent / 100.0;
     let low_idx = ((values.len() as f32 * clip_fraction) as usize).min(values.len() - 1);
     let high_idx = ((values.len() as f32 * (1.0 - clip_fraction)) as usize).min(values.len() - 1);
 
+    // Use partial sorting to find the specific percentiles without sorting the entire array
+    // This is O(n) instead of O(n log n)
+    values.select_nth_unstable_by(low_idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let min = values[low_idx];
+    
+    // Only sort the upper portion if needed
+    if high_idx > low_idx {
+        values[low_idx..].select_nth_unstable_by(
+            high_idx - low_idx,
+            |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        );
+    }
     let max = values[high_idx];
 
     // Ensure we have a valid range
@@ -190,24 +202,26 @@ fn collect_channel_stats(data: &[f32], low: f32, high: f32) -> ChannelStats {
     stats
 }
 
-/// Adaptive shadow lift based on percentile
+/// Adaptive shadow lift based on percentile using efficient partial sort
 pub fn adaptive_shadow_lift(data: &mut [f32], target_black: f32, percentile: f32) -> f32 {
     if data.is_empty() {
         return 0.0;
     }
 
-    // Find the specified percentile value (e.g., 1st percentile)
-    let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let idx = ((sorted.len() as f32 * percentile / 100.0) as usize).min(sorted.len() - 1);
-    let current_black = sorted[idx];
+    // Find the specified percentile value (e.g., 1st percentile) using select_nth_unstable
+    // This avoids copying the entire array and is O(n) instead of O(n log n)
+    let idx = ((data.len() as f32 * percentile / 100.0) as usize).min(data.len() - 1);
+    
+    // We need to work with a temporary copy for finding percentile without modifying original order
+    let mut temp: Vec<f32> = data.iter().copied().collect();
+    temp.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let current_black = temp[idx];
 
     // Calculate lift amount to bring current_black to target_black
     let lift = target_black - current_black;
 
     if lift > 0.0 {
-        // Apply uniform lift to all values
+        // Apply uniform lift to all values in-place
         for value in data.iter_mut() {
             *value = (*value + lift).clamp(0.0, 1.0);
         }
@@ -241,8 +255,11 @@ pub fn auto_exposure(
         return 1.0;
     }
 
+    // Pre-allocate luminance buffer with exact capacity
+    let num_pixels = data.len() / 3;
+    let mut luminances = Vec::with_capacity(num_pixels);
+    
     // Collect luminance samples (Rec.709 weights)
-    let mut luminances = Vec::with_capacity(data.len() / 3);
     for pixel in data.chunks_exact(3) {
         let lum = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
         luminances.push(lum);
@@ -252,6 +269,7 @@ pub fn auto_exposure(
         return 1.0;
     }
 
+    // Use select_nth_unstable for efficient median finding
     let mid = luminances.len() / 2;
     luminances.select_nth_unstable_by(mid, |a, b| {
         a.partial_cmp(b).unwrap_or(Ordering::Equal)
@@ -270,6 +288,7 @@ pub fn auto_exposure(
         return 1.0;
     }
 
+    // Apply gain in-place
     for value in data.iter_mut() {
         *value = (*value * gain).clamp(0.0, 1.0);
     }

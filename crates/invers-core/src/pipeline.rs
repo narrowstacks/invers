@@ -481,17 +481,28 @@ fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize
         })
         .collect();
 
-    // Sort by brightness (descending - brightest first)
-    brightness_pixels.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Take the top N brightest pixels (or all if fewer than N)
+    // Use partial sort to find top N brightest pixels (much faster than full sort)
     let n = num_pixels.min(brightness_pixels.len());
-    let brightest: Vec<[f32; 3]> = brightness_pixels[..n].iter().map(|(_, p)| *p).collect();
+    let threshold_idx = brightness_pixels.len().saturating_sub(n);
+    brightness_pixels.select_nth_unstable_by(
+        threshold_idx,
+        |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+    );
+    
+    // The brightest N pixels are now in the last n positions
+    let brightest_slice = &brightness_pixels[threshold_idx..];
 
     // Compute median for each channel from these brightest pixels
-    let mut r_values: Vec<f32> = brightest.iter().map(|p| p[0]).collect();
-    let mut g_values: Vec<f32> = brightest.iter().map(|p| p[1]).collect();
-    let mut b_values: Vec<f32> = brightest.iter().map(|p| p[2]).collect();
+    // Pre-allocate with exact capacity for efficiency
+    let mut r_values: Vec<f32> = Vec::with_capacity(n);
+    let mut g_values: Vec<f32> = Vec::with_capacity(n);
+    let mut b_values: Vec<f32> = Vec::with_capacity(n);
+    
+    for (_, pixel) in brightest_slice {
+        r_values.push(pixel[0]);
+        g_values.push(pixel[1]);
+        b_values.push(pixel[2]);
+    }
 
     [
         compute_median(&mut r_values),
@@ -500,21 +511,27 @@ fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize
     ]
 }
 
-/// Compute median of a slice
+/// Compute median of a slice using partial sorting (much faster than full sort)
 fn compute_median(values: &mut [f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
 
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
     let len = values.len();
+    let mid = len / 2;
+    
     if len % 2 == 0 {
         // Even length: average of two middle values
-        (values[len / 2 - 1] + values[len / 2]) / 2.0
+        // Use select_nth_unstable to partially sort only what we need
+        values.select_nth_unstable_by(mid - 1, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let lower = values[mid - 1];
+        values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let upper = values[mid];
+        (lower + upper) / 2.0
     } else {
         // Odd length: middle value
-        values[len / 2]
+        values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values[mid]
     }
 }
 

@@ -38,15 +38,22 @@ pub struct DiagnosticReport {
     pub exposure_ratio: f32,   // Overall brightness ratio (third_party / ours)
 }
 
-/// Compute comprehensive statistics for an image
+/// Compute comprehensive statistics for an image in a single pass
 pub fn compute_statistics(data: &[f32], channels: u8) -> [ChannelStats; 3] {
     if channels != 3 {
         panic!("Only 3-channel RGB images supported");
     }
 
-    let mut channel_data: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let num_pixels = data.len() / 3;
+    
+    // Pre-allocate with exact capacity to avoid reallocation
+    let mut channel_data: [Vec<f32>; 3] = [
+        Vec::with_capacity(num_pixels),
+        Vec::with_capacity(num_pixels),
+        Vec::with_capacity(num_pixels),
+    ];
 
-    // Separate channels
+    // Single pass to separate channels
     for pixel in data.chunks_exact(3) {
         channel_data[0].push(pixel[0]);
         channel_data[1].push(pixel[1]);
@@ -61,7 +68,7 @@ pub fn compute_statistics(data: &[f32], channels: u8) -> [ChannelStats; 3] {
     ]
 }
 
-/// Compute statistics for a single channel
+/// Compute statistics for a single channel using efficient algorithms
 fn compute_channel_stats(data: &[f32]) -> ChannelStats {
     if data.is_empty() {
         return ChannelStats {
@@ -74,26 +81,41 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
         };
     }
 
+    // Create a sorted copy for percentile calculations
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    
+    // Single pass for min, max, and sum
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    let mut sum = 0.0;
+    
+    for &val in data {
+        min = min.min(val);
+        max = max.max(val);
+        sum += val;
+    }
+    
+    let mean = sum / data.len() as f32;
+    
+    // Use partial sort for median - only sort what we need
+    let mid = sorted.len() / 2;
+    sorted.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    let median = sorted[mid];
 
-    let min = sorted[0];
-    let max = sorted[sorted.len() - 1];
-    let mean = data.iter().sum::<f32>() / data.len() as f32;
-    let median = sorted[sorted.len() / 2];
-
-    // Compute standard deviation
+    // Compute standard deviation in a single pass
     let variance = data.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / data.len() as f32;
     let std_dev = variance.sqrt();
 
-    // Compute percentiles
-    let percentiles = vec![1, 5, 25, 50, 75, 95, 99]
-        .into_iter()
-        .map(|p| {
-            let idx = ((p as f32 / 100.0) * (sorted.len() - 1) as f32).round() as usize;
-            (p, sorted[idx])
-        })
-        .collect();
+    // Compute percentiles efficiently using partial sorts
+    let percentile_values = vec![1, 5, 25, 50, 75, 95, 99];
+    let mut percentiles = Vec::with_capacity(percentile_values.len());
+    
+    for p in percentile_values {
+        let idx = ((p as f32 / 100.0) * (sorted.len() - 1) as f32).round() as usize;
+        // Use select_nth_unstable for each percentile
+        sorted.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap());
+        percentiles.push((p, sorted[idx]));
+    }
 
     ChannelStats {
         min,
@@ -105,15 +127,22 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
     }
 }
 
-/// Generate histogram for an image
+/// Generate histogram for an image with pre-allocated buffers
 pub fn compute_histograms(data: &[f32], channels: u8, num_bins: usize) -> [Histogram; 3] {
     if channels != 3 {
         panic!("Only 3-channel RGB images supported");
     }
 
-    let mut channel_data: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let num_pixels = data.len() / 3;
+    
+    // Pre-allocate with exact capacity
+    let mut channel_data: [Vec<f32>; 3] = [
+        Vec::with_capacity(num_pixels),
+        Vec::with_capacity(num_pixels),
+        Vec::with_capacity(num_pixels),
+    ];
 
-    // Separate channels
+    // Single pass to separate channels
     for pixel in data.chunks_exact(3) {
         channel_data[0].push(pixel[0]);
         channel_data[1].push(pixel[1]);
