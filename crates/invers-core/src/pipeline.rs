@@ -62,7 +62,7 @@ pub fn process_image(
     }
 
     // Step 3: Base subtraction and inversion
-    invert_negative(&mut data, &base_estimation, channels, &options)?;
+    invert_negative(&mut data, &base_estimation, channels, options)?;
 
     if options.debug {
         let stats = compute_stats(&data);
@@ -440,7 +440,7 @@ fn validate_base_candidate(
     (true, "within expected range".to_string())
 }
 
-/// Extract pixels from a region of interest
+/// Extract pixels from a region of interest with pre-allocation
 fn extract_roi_pixels(
     image: &DecodedImage,
     x: u32,
@@ -448,16 +448,19 @@ fn extract_roi_pixels(
     width: u32,
     height: u32,
 ) -> Vec<[f32; 3]> {
-    let mut pixels = Vec::with_capacity((width * height) as usize);
+    // Pre-allocate with exact capacity
+    let capacity = (width * height) as usize;
+    let mut pixels = Vec::with_capacity(capacity);
 
     for row in y..(y + height) {
-        for col in x..(x + width) {
-            let pixel_idx = ((row * image.width + col) * 3) as usize;
-            if pixel_idx + 2 < image.data.len() {
-                let r = image.data[pixel_idx];
-                let g = image.data[pixel_idx + 1];
-                let b = image.data[pixel_idx + 2];
-                pixels.push([r, g, b]);
+        let row_start = (row * image.width + x) as usize * 3;
+        let row_pixels = ((x + width).min(image.width) - x) as usize;
+        let row_end = row_start + row_pixels * 3;
+        
+        if row_end <= image.data.len() {
+            // Process entire row at once for better cache locality
+            for pixel in image.data[row_start..row_end].chunks_exact(3) {
+                pixels.push([pixel[0], pixel[1], pixel[2]]);
             }
         }
     }
@@ -520,7 +523,7 @@ fn compute_median(values: &mut [f32]) -> f32 {
     let len = values.len();
     let mid = len / 2;
     
-    if len % 2 == 0 {
+    if len.is_multiple_of(2) {
         // Even length: average of two middle values
         // Use select_nth_unstable to partially sort only what we need
         values.select_nth_unstable_by(mid - 1, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -565,8 +568,8 @@ fn compute_noise_stats(pixels: &[[f32; 3]], medians: &[f32; 3]) -> [f32; 3] {
 /// Estimate film base ROI candidates automatically using heuristics.
 /// Order is determined later based on brightness.
 fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
-    let border_width = (image.width / 20).max(50).min(200);
-    let border_height = (image.height / 20).max(50).min(200);
+    let border_width = (image.width / 20).clamp(50, 200);
+    let border_height = (image.height / 20).clamp(50, 200);
 
     let candidates = [
         (
@@ -637,6 +640,7 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
 /// Sample the average brightness of a region with color-aware weighting
 /// For color negatives, film base is orange (high R+G, lower B)
 /// Weight channels to detect orange mask: 0.5*R + 0.4*G + 0.1*B
+/// Optimized to use single-pass accumulation
 fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> f32 {
     let x_end = (x + width).min(image.width);
     let y_end = (y + height).min(image.height);
@@ -644,16 +648,16 @@ fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, he
     let mut sum = 0.0;
     let mut count = 0;
 
+    // Single pass with bounds checking
     for row in y..y_end {
-        for col in x..x_end {
-            let pixel_idx = ((row * image.width + col) * 3) as usize;
-            if pixel_idx + 2 < image.data.len() {
-                let r = image.data[pixel_idx];
-                let g = image.data[pixel_idx + 1];
-                let b = image.data[pixel_idx + 2];
-
+        let row_start = (row * image.width + x) as usize * 3;
+        let row_end = (row * image.width + x_end.min(image.width)) as usize * 3;
+        
+        if row_end <= image.data.len() {
+            // Process entire row at once for better cache locality
+            for pixel in image.data[row_start..row_end].chunks_exact(3) {
                 // Weight for orange mask detection (prioritizes R+G over B)
-                sum += 0.5 * r + 0.4 * g + 0.1 * b;
+                sum += 0.5 * pixel[0] + 0.4 * pixel[1] + 0.1 * pixel[2];
                 count += 1;
             }
         }
@@ -677,7 +681,7 @@ pub fn invert_negative(
         return Err(format!("Expected 3 channels, got {}", channels));
     }
 
-    if data.len() % 3 != 0 {
+    if !data.len().is_multiple_of(3) {
         return Err(format!(
             "Data length {} is not divisible by 3 (RGB)",
             data.len()
@@ -878,13 +882,7 @@ fn enforce_working_range(data: &mut [f32]) {
 
 #[inline]
 fn clamp_to_working_range(value: f32) -> f32 {
-    if value <= WORKING_RANGE_FLOOR {
-        WORKING_RANGE_FLOOR
-    } else if value >= WORKING_RANGE_CEILING {
-        WORKING_RANGE_CEILING
-    } else {
-        value
-    }
+    value.clamp(WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING)
 }
 
 /// Compute min, max, and mean statistics for debug output

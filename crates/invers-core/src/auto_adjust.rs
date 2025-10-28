@@ -75,6 +75,7 @@ fn compute_clipped_range(values: &mut [f32], clip_percent: f32) -> (f32, f32) {
 }
 
 /// Stretch a value from [old_min, old_max] to [0.0, 1.0]
+#[inline]
 fn stretch_value(value: f32, old_min: f32, old_max: f32) -> f32 {
     if (old_max - old_min).abs() < 0.0001 {
         return value.clamp(0.0, 1.0);
@@ -213,7 +214,7 @@ pub fn adaptive_shadow_lift(data: &mut [f32], target_black: f32, percentile: f32
     let idx = ((data.len() as f32 * percentile / 100.0) as usize).min(data.len() - 1);
     
     // We need to work with a temporary copy for finding percentile without modifying original order
-    let mut temp: Vec<f32> = data.iter().copied().collect();
+    let mut temp: Vec<f32> = data.to_vec();
     temp.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let current_black = temp[idx];
 
@@ -231,6 +232,7 @@ pub fn adaptive_shadow_lift(data: &mut [f32], target_black: f32, percentile: f32
 }
 
 /// Highlight compression: Compress bright highlights to prevent clipping
+#[inline]
 pub fn compress_highlights(data: &mut [f32], threshold: f32, compression: f32) {
     for value in data.iter_mut() {
         if *value > threshold {

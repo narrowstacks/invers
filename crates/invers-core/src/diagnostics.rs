@@ -172,6 +172,7 @@ fn compute_channel_histogram(data: &[f32], num_bins: usize) -> Histogram {
 
 /// Create a difference map between two images
 /// Returns absolute differences as a new image
+/// Optimized for cache efficiency
 pub fn create_difference_map(
     img1: &[f32],
     img2: &[f32],
@@ -186,11 +187,11 @@ pub fn create_difference_map(
         ));
     }
 
-    let diff: Vec<f32> = img1
-        .iter()
-        .zip(img2.iter())
-        .map(|(a, b)| (a - b).abs())
-        .collect();
+    // Pre-allocate and use direct iteration for better performance
+    let mut diff = Vec::with_capacity(img1.len());
+    for i in 0..img1.len() {
+        diff.push((img1[i] - img2[i]).abs());
+    }
 
     Ok(diff)
 }
