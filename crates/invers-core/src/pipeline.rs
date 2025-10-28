@@ -651,7 +651,7 @@ fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, he
     // Single pass with bounds checking
     for row in y..y_end {
         let row_start = (row * image.width + x) as usize * 3;
-        let row_end = (row * image.width + x_end.min(image.width)) as usize * 3;
+        let row_end = (row * image.width + x_end) as usize * 3;
         
         if row_end <= image.data.len() {
             // Process entire row at once for better cache locality
