@@ -5,12 +5,16 @@
 use eframe::egui;
 use invers_core::{
     decoders::{decode_image, DecodedImage},
-    models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams},
+    models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams, OutputFormat},
     pipeline::{estimate_base, process_image, ProcessedImage},
 };
+use invers_cli::determine_output_path;
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
+    // Log which pipeline configuration is being loaded
+    invers_core::config::log_config_usage();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 800.0])
@@ -57,8 +61,14 @@ struct InversApp {
     // Color matrix (3x3)
     color_matrix: [[f32; 3]; 3],
 
+    // Export options
+    output_format: OutputFormat,
+    output_colorspace: String,
+
     // UI state
     show_color_matrix: bool,
+    show_export_options: bool,
+    show_preset_manager: bool,
     processing_needed: bool,
     error_message: Option<String>,
     eyedropper_mode: bool,
@@ -95,7 +105,13 @@ impl Default for InversApp {
             // Identity matrix by default
             color_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
 
+            // Export options
+            output_format: OutputFormat::Tiff16,
+            output_colorspace: "linear-rec2020".to_string(),
+
             show_color_matrix: false,
+            show_export_options: false,
+            show_preset_manager: false,
             processing_needed: false,
             error_message: None,
             eyedropper_mode: false,
@@ -119,6 +135,10 @@ impl eframe::App for InversApp {
                         }
                         ui.close_menu();
                     }
+                    if ui.button("Export as...").clicked() {
+                        self.show_export_options = !self.show_export_options;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -127,6 +147,13 @@ impl eframe::App for InversApp {
 
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_color_matrix, "Show Color Matrix");
+                });
+
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("Presets").clicked() {
+                        self.show_preset_manager = !self.show_preset_manager;
+                        ui.close_menu();
+                    }
                 });
             });
         });
@@ -180,6 +207,26 @@ impl eframe::App for InversApp {
             if should_close {
                 self.error_message = None;
             }
+        }
+
+        // Export options window
+        if self.show_export_options {
+            egui::Window::new("Export Options")
+                .resizable(true)
+                .default_size([400.0, 300.0])
+                .show(ctx, |ui| {
+                    self.show_export_panel(ui);
+                });
+        }
+
+        // Preset manager window
+        if self.show_preset_manager {
+            egui::Window::new("Preset Manager")
+                .resizable(true)
+                .default_size([400.0, 400.0])
+                .show(ctx, |ui| {
+                    self.show_preset_panel(ui);
+                });
         }
     }
 }
@@ -286,7 +333,7 @@ impl InversApp {
             input_paths: vec![],
             output_dir: PathBuf::from("."),
             output_format: invers_core::models::OutputFormat::Tiff16,
-            working_colorspace: "linear-rec2020".to_string(),
+            working_colorspace: self.output_colorspace.clone(), // Use same colorspace as export
             bit_depth_policy: invers_core::models::BitDepthPolicy::MatchInput,
             film_preset: Some(preset),
             scan_profile: None,
@@ -345,6 +392,81 @@ impl InversApp {
             pixel[1] = (pixel[1] * self.white_balance_g).clamp(0.0, 1.0);
             pixel[2] = (pixel[2] * self.white_balance_b).clamp(0.0, 1.0);
         }
+    }
+
+    fn process_original_for_export(&self) -> Result<ProcessedImage, String> {
+        // Process the original full-resolution image with current parameters
+        let Some(ref original_image) = self.loaded_image else {
+            return Err("No original image loaded".to_string());
+        };
+
+        // Build base estimation from current parameters
+        let base = BaseEstimation {
+            roi: None,
+            medians: [self.base_r, self.base_g, self.base_b],
+            noise_stats: None,
+            auto_estimated: false,
+        };
+
+        // Build film preset with current parameters
+        let preset = FilmPreset {
+            name: "Custom".to_string(),
+            base_offsets: [self.base_offset_r, self.base_offset_g, self.base_offset_b],
+            color_matrix: self.color_matrix,
+            tone_curve: ToneCurveParams {
+                curve_type: "neutral".to_string(),
+                strength: self.tone_curve_strength,
+                params: std::collections::HashMap::new(),
+            },
+            notes: None,
+        };
+
+        // Build convert options
+        let defaults = invers_core::config::pipeline_config_handle()
+            .config
+            .defaults
+            .clone();
+
+        let options = ConvertOptions {
+            input_paths: vec![],
+            output_dir: PathBuf::from("."),
+            output_format: self.output_format,
+            working_colorspace: self.output_colorspace.clone(),
+            bit_depth_policy: invers_core::models::BitDepthPolicy::MatchInput,
+            film_preset: Some(preset),
+            scan_profile: None,
+            base_estimation: Some(base),
+            num_threads: None,
+            skip_tone_curve: self.skip_tone_curve || defaults.skip_tone_curve,
+            skip_color_matrix: self.skip_color_matrix || defaults.skip_color_matrix,
+            exposure_compensation: defaults.exposure_compensation * self.exposure_compensation,
+            debug: false,
+            enable_auto_levels: defaults.enable_auto_levels,
+            auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+            enable_auto_color: defaults.enable_auto_color,
+            auto_color_strength: defaults.auto_color_strength,
+            auto_color_min_gain: defaults.auto_color_min_gain,
+            auto_color_max_gain: defaults.auto_color_max_gain,
+            base_brightest_percent: defaults.base_brightest_percent,
+            base_sampling_mode: defaults.base_sampling_mode,
+            inversion_mode: defaults.inversion_mode,
+            shadow_lift_mode: defaults.shadow_lift_mode,
+            shadow_lift_value: defaults.shadow_lift_value,
+            highlight_compression: defaults.highlight_compression,
+            enable_auto_exposure: defaults.enable_auto_exposure,
+            auto_exposure_target_median: defaults.auto_exposure_target_median,
+            auto_exposure_strength: defaults.auto_exposure_strength,
+            auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+            auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+        };
+
+        // Process the original full-resolution image
+        let mut result = process_image(original_image.clone(), &options)?;
+
+        // Apply white balance to the processed result
+        self.apply_white_balance(&mut result);
+
+        Ok(result)
     }
 
     fn show_image_preview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -549,11 +671,17 @@ impl InversApp {
         let height = result.height as usize;
         let mut pixels = Vec::with_capacity(width * height);
 
-        // Convert f32 linear RGB to sRGB u8 for display
+        // Apply display gamma to linear data WITHOUT colorspace conversion
+        // This preserves the wide-gamut colors and lets the OS/compositor handle
+        // the color management to the monitor's native colorspace
+        //
+        // We apply a simple 2.2 gamma (close to sRGB) for perceptually correct display
         for pixel in result.data.chunks_exact(3) {
-            let r = linear_to_srgb(pixel[0]);
-            let g = linear_to_srgb(pixel[1]);
-            let b = linear_to_srgb(pixel[2]);
+            // Apply display gamma (2.2) to linear values
+            // This is simpler than sRGB transfer function and works well for display
+            let r = apply_display_gamma(pixel[0]);
+            let g = apply_display_gamma(pixel[1]);
+            let b = apply_display_gamma(pixel[2]);
             pixels.push(egui::Color32::from_rgb(r, g, b));
         }
 
@@ -763,6 +891,132 @@ impl InversApp {
             ));
         }
     }
+
+    fn show_export_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label("Select export format and colorspace:");
+        ui.separator();
+
+        // Export format
+        ui.label("Format:");
+        if ui.selectable_label(self.output_format == OutputFormat::Tiff16, "TIFF 16-bit").clicked() {
+            self.output_format = OutputFormat::Tiff16;
+        }
+        if ui.selectable_label(self.output_format == OutputFormat::LinearDng, "Linear DNG").clicked() {
+            self.output_format = OutputFormat::LinearDng;
+        }
+
+        ui.separator();
+
+        // Colorspace
+        ui.label("Working colorspace:");
+        let colorspaces = vec!["linear-rec2020", "linear-srgb", "linear-adobe-rgb"];
+        for cs in colorspaces {
+            if ui.selectable_label(self.output_colorspace == cs, cs).clicked() {
+                self.output_colorspace = cs.to_string();
+                self.processing_needed = true; // Trigger preview update
+            }
+        }
+
+        ui.separator();
+
+        // Export button
+        if let Some(ref loaded_path) = self.loaded_path {
+            if ui.button("Export Full Resolution Image").clicked() {
+                if let Some(ref _preview_result) = self.processed_result {
+                    // Process the original full-resolution image with current parameters
+                    match self.process_original_for_export() {
+                        Ok(processed) => {
+                            let output_path = determine_output_path(
+                                &loaded_path,
+                                &Some(PathBuf::from(".")),
+                                match self.output_format {
+                                    OutputFormat::Tiff16 => "tiff16",
+                                    OutputFormat::LinearDng => "dng",
+                                },
+                            );
+
+                            if let Ok(path) = output_path {
+                                match invers_core::exporters::export_tiff16(&processed, &path, None) {
+                                    Ok(_) => {
+                                        self.error_message = Some(format!("Exported to: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        self.error_message = Some(format!("Export failed: {}", e));
+                                    }
+                                }
+                            } else {
+                                self.error_message = Some("Invalid output path".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("Failed to process image for export: {}", e));
+                        }
+                    }
+                } else {
+                    self.error_message = Some("No image loaded to export".to_string());
+                }
+                self.show_export_options = false;
+            }
+        } else {
+            ui.label("Load an image first");
+        }
+    }
+
+    fn show_preset_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label("Preset management (load presets from files):");
+        ui.separator();
+
+        if ui.button("Load Film Preset...").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("YAML Presets", &["yml", "yaml"])
+                .pick_file()
+            {
+                match invers_core::presets::load_film_preset(&path) {
+                    Ok(preset) => {
+                        // Apply loaded preset
+                        self.base_offset_r = preset.base_offsets[0];
+                        self.base_offset_g = preset.base_offsets[1];
+                        self.base_offset_b = preset.base_offsets[2];
+                        self.color_matrix = preset.color_matrix;
+                        self.tone_curve_strength = preset.tone_curve.strength;
+
+                        self.processing_needed = true;
+                        self.error_message = Some(format!("Loaded preset: {}", preset.name));
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to load preset: {}", e));
+                    }
+                }
+            }
+        }
+
+        ui.separator();
+
+        if ui.button("List Available Presets").clicked() {
+            match invers_core::presets::get_presets_dir() {
+                Ok(dir) => {
+                    match invers_core::presets::list_film_presets(&dir) {
+                        Ok(presets) => {
+                            let list = presets.join(", ");
+                            self.error_message = Some(format!("Available: {}", list));
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("Failed to list presets: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Presets directory not found: {}", e));
+                }
+            }
+        }
+
+        ui.separator();
+        ui.label("Current preset parameters:");
+        ui.label(format!("Base offsets: [{:.3}, {:.3}, {:.3}]",
+            self.base_offset_r, self.base_offset_g, self.base_offset_b));
+        ui.label(format!("Tone strength: {:.3}", self.tone_curve_strength));
+    }
 }
 
 /// Downsample image for fast preview
@@ -830,13 +1084,16 @@ fn downsample_image(image: &DecodedImage, max_dimension: u32) -> DecodedImage {
     }
 }
 
-/// Convert linear RGB value to sRGB with gamma correction
-fn linear_to_srgb(linear: f32) -> u8 {
+/// Apply sRGB transfer function to linear values for display
+/// This applies the standard sRGB gamma curve (piece-wise function with gamma ~2.4)
+/// without performing colorspace primaries conversion
+fn apply_display_gamma(linear: f32) -> u8 {
     let linear = linear.clamp(0.0, 1.0);
-    let srgb = if linear <= 0.0031308 {
+    // Standard sRGB transfer function (EOTF inverse)
+    let encoded = if linear <= 0.0031308 {
         linear * 12.92
     } else {
         1.055 * linear.powf(1.0 / 2.4) - 0.055
     };
-    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
+    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
 }

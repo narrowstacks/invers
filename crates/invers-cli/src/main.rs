@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use invers_cli::{parse_roi, determine_output_path, build_convert_options};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -362,8 +363,6 @@ fn cmd_convert(
     debug: bool,
 ) -> Result<(), String> {
     invers_core::config::log_config_usage();
-    let config_handle = invers_core::config::pipeline_config_handle();
-    let defaults = config_handle.config.defaults.clone();
 
     println!("Converting {} to positive...", input.display());
 
@@ -408,49 +407,24 @@ fn cmd_convert(
     let output_path = determine_output_path(&input, &out, &export)?;
     println!("Output: {}", output_path.display());
 
-    // Parse output format
-    let output_format = match export.as_str() {
-        "tiff16" | "tiff" => invers_core::models::OutputFormat::Tiff16,
-        "dng" => invers_core::models::OutputFormat::LinearDng,
-        _ => return Err(format!("Unknown export format: {}", export)),
-    };
+    let output_dir = output_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
 
-    // Build conversion options
-    let options = invers_core::models::ConvertOptions {
-        input_paths: vec![input.clone()],
-        output_dir: output_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf(),
-        output_format,
-        working_colorspace: colorspace.clone(),
-        bit_depth_policy: invers_core::models::BitDepthPolicy::Force16Bit,
+    // Build conversion options using shared utility
+    let options = build_convert_options(
+        input.clone(),
+        output_dir,
+        &export,
+        colorspace,
+        Some(base_estimation),
         film_preset,
-        scan_profile: None,
-        base_estimation: Some(base_estimation),
-        num_threads: None,
-        skip_tone_curve: no_tonecurve || defaults.skip_tone_curve,
-        skip_color_matrix: no_colormatrix || defaults.skip_color_matrix,
-        exposure_compensation: defaults.exposure_compensation * exposure,
+        no_tonecurve,
+        no_colormatrix,
+        exposure,
         debug,
-        enable_auto_levels: defaults.enable_auto_levels,
-        auto_levels_clip_percent: defaults.auto_levels_clip_percent,
-        enable_auto_color: defaults.enable_auto_color,
-        auto_color_strength: defaults.auto_color_strength,
-        auto_color_min_gain: defaults.auto_color_min_gain,
-        auto_color_max_gain: defaults.auto_color_max_gain,
-        base_brightest_percent: defaults.base_brightest_percent,
-        base_sampling_mode: defaults.base_sampling_mode,
-        inversion_mode: defaults.inversion_mode,
-        shadow_lift_mode: defaults.shadow_lift_mode,
-        shadow_lift_value: defaults.shadow_lift_value,
-        highlight_compression: defaults.highlight_compression,
-        enable_auto_exposure: defaults.enable_auto_exposure,
-        auto_exposure_target_median: defaults.auto_exposure_target_median,
-        auto_exposure_strength: defaults.auto_exposure_strength,
-        auto_exposure_min_gain: defaults.auto_exposure_min_gain,
-        auto_exposure_max_gain: defaults.auto_exposure_max_gain,
-    };
+    )?;
 
     // Process image
     println!("Processing image...");
@@ -459,13 +433,13 @@ fn cmd_convert(
     // Export
     println!(
         "Exporting to {}...",
-        if output_format == invers_core::models::OutputFormat::Tiff16 {
+        if options.output_format == invers_core::models::OutputFormat::Tiff16 {
             "TIFF16"
         } else {
             "DNG"
         }
     );
-    match output_format {
+    match options.output_format {
         invers_core::models::OutputFormat::Tiff16 => {
             invers_core::exporters::export_tiff16(&processed, &output_path, None)?;
         }
@@ -535,80 +509,148 @@ fn cmd_analyze_base(
     Ok(())
 }
 
-/// Parse ROI string in format "x,y,width,height"
-fn parse_roi(roi_str: &str) -> Result<(u32, u32, u32, u32), String> {
-    let parts: Vec<&str> = roi_str.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!(
-            "ROI must be in format x,y,width,height, got: {}",
-            roi_str
-        ));
-    }
-
-    let x = parts[0]
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid x coordinate: {}", parts[0]))?;
-    let y = parts[1]
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid y coordinate: {}", parts[1]))?;
-    let width = parts[2]
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid width: {}", parts[2]))?;
-    let height = parts[3]
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| format!("Invalid height: {}", parts[3]))?;
-
-    Ok((x, y, width, height))
-}
-
-/// Determine output path based on input, output dir, and export format
-fn determine_output_path(
-    input: &PathBuf,
-    out: &Option<PathBuf>,
-    export: &str,
-) -> Result<PathBuf, String> {
-    let extension = match export {
-        "tiff16" | "tiff" => "tif",
-        "dng" => "dng",
-        _ => "tif",
-    };
-
-    if let Some(out_path) = out {
-        // If out is a directory, use input filename with new extension
-        if out_path.is_dir() {
-            let filename = input
-                .file_stem()
-                .ok_or("Invalid input filename")?
-                .to_string_lossy();
-            Ok(out_path.join(format!("{}_positive.{}", filename, extension)))
-        } else {
-            // Use the specified path as-is
-            Ok(out_path.clone())
-        }
-    } else {
-        // Use input directory with modified filename
-        let filename = input
-            .file_stem()
-            .ok_or("Invalid input filename")?
-            .to_string_lossy();
-        let parent = input.parent().unwrap_or(std::path::Path::new("."));
-        Ok(parent.join(format!("{}_positive.{}", filename, extension)))
-    }
-}
 
 fn cmd_batch(
-    _inputs: Vec<PathBuf>,
-    _base_from: Option<PathBuf>,
-    _preset: Option<PathBuf>,
-    _export: String,
-    _out: Option<PathBuf>,
+    inputs: Vec<PathBuf>,
+    base_from: Option<PathBuf>,
+    preset: Option<PathBuf>,
+    export: String,
+    out: Option<PathBuf>,
     _threads: Option<usize>,
 ) -> Result<(), String> {
-    println!("Batch command - not yet implemented");
+    if inputs.is_empty() {
+        return Err("No input files specified".to_string());
+    }
+
+    invers_core::config::log_config_usage();
+    println!("========================================");
+    println!("BATCH PROCESSING");
+    println!("========================================\n");
+
+    // Load base estimation if provided
+    let base_estimation: Option<invers_core::models::BaseEstimation> = if let Some(base_path) = base_from {
+        println!("Loading base estimation from: {}", base_path.display());
+        let json_str = std::fs::read_to_string(&base_path)
+            .map_err(|e| format!("Failed to read base file: {}", e))?;
+        Some(serde_json::from_str(&json_str)
+            .map_err(|e| format!("Failed to parse base estimation: {}", e))?)
+    } else {
+        None
+    };
+
+    // Load film preset if provided
+    let film_preset = if let Some(preset_path) = preset {
+        println!("Loading film preset from {}...", preset_path.display());
+        Some(invers_core::presets::load_film_preset(&preset_path)?)
+    } else {
+        None
+    };
+
+    let total_files = inputs.len();
+    println!("Processing {} file(s)...\n", total_files);
+
+    let mut processed_count = 0;
+    let mut failed_count = 0;
+
+    for (idx, input_path) in inputs.iter().enumerate() {
+        println!("[{}/{}] Processing: {}", idx + 1, total_files, input_path.display());
+
+        // Skip if input doesn't exist
+        if !input_path.exists() {
+            eprintln!("  ✗ File not found, skipping");
+            failed_count += 1;
+            continue;
+        }
+
+        // Decode image
+        match invers_core::decoders::decode_image(input_path) {
+            Ok(decoded) => {
+                // Estimate base if not provided
+                let base = if let Some(ref be) = base_estimation {
+                    be.clone()
+                } else {
+                    match invers_core::pipeline::estimate_base(&decoded, None) {
+                        Ok(est) => est,
+                        Err(e) => {
+                            eprintln!("  ✗ Base estimation failed: {}", e);
+                            failed_count += 1;
+                            continue;
+                        }
+                    }
+                };
+
+                // Determine output path
+                let output_path = match determine_output_path(input_path, &out, &export) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("  ✗ Invalid output path: {}", e);
+                        failed_count += 1;
+                        continue;
+                    }
+                };
+
+                let output_dir = output_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf();
+
+                // Build conversion options
+                match build_convert_options(
+                    input_path.clone(),
+                    output_dir,
+                    &export,
+                    "linear-rec2020".to_string(),
+                    Some(base),
+                    film_preset.clone(),
+                    false,
+                    false,
+                    1.0,
+                    false,
+                ) {
+                    Ok(options) => {
+                        // Process image
+                        match invers_core::pipeline::process_image(decoded, &options) {
+                            Ok(processed) => {
+                                // Export
+                                match invers_core::exporters::export_tiff16(&processed, &output_path, None) {
+                                    Ok(_) => {
+                                        println!("  ✓ Exported to: {}", output_path.display());
+                                        processed_count += 1;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  ✗ Export failed: {}", e);
+                                        failed_count += 1;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("  ✗ Processing failed: {}", e);
+                                failed_count += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  ✗ Configuration failed: {}", e);
+                        failed_count += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("  ✗ Failed to decode image: {}", e);
+                failed_count += 1;
+            }
+        }
+    }
+
+    println!("\n========================================");
+    println!("BATCH PROCESSING COMPLETE");
+    println!("========================================");
+    println!("Processed: {} / {}", processed_count, total_files);
+    if failed_count > 0 {
+        println!("Failed: {}", failed_count);
+    }
+    println!();
+
     Ok(())
 }
 
@@ -633,13 +675,70 @@ fn cmd_preset_list(_dir: Option<PathBuf>) -> Result<(), String> {
     }
 }
 
-fn cmd_preset_show(_preset: String) -> Result<(), String> {
-    println!("Show preset command - not yet implemented");
+fn cmd_preset_show(preset: String) -> Result<(), String> {
+    println!("Loading preset: {}", preset);
+
+    // Try to load as file first
+    let preset_path = PathBuf::from(&preset);
+    let preset_obj = if preset_path.exists() {
+        invers_core::presets::load_film_preset(&preset_path)?
+    } else {
+        // Try to find it in the presets directory
+        let dir = invers_core::presets::get_presets_dir()
+            .unwrap_or_else(|_| PathBuf::from("profiles/film"));
+        let full_path = dir.join(format!("{}.yml", preset));
+        invers_core::presets::load_film_preset(&full_path)?
+    };
+
+    println!("\nPreset: {}", preset_obj.name);
+    println!("Base Offsets (RGB): [{:.6}, {:.6}, {:.6}]",
+        preset_obj.base_offsets[0], preset_obj.base_offsets[1], preset_obj.base_offsets[2]);
+
+    println!("\nTone Curve:");
+    println!("  Type: {}", preset_obj.tone_curve.curve_type);
+    println!("  Strength: {:.6}", preset_obj.tone_curve.strength);
+
+    println!("\nColor Matrix (3x3):");
+    for row in &preset_obj.color_matrix {
+        println!("  [{:.6}, {:.6}, {:.6}]", row[0], row[1], row[2]);
+    }
+
+    if let Some(notes) = &preset_obj.notes {
+        println!("\nNotes: {}", notes);
+    }
+
+    println!();
     Ok(())
 }
 
-fn cmd_preset_create(_output: PathBuf, _name: String) -> Result<(), String> {
-    println!("Create preset command - not yet implemented");
+fn cmd_preset_create(output: PathBuf, name: String) -> Result<(), String> {
+    println!("Creating new preset: {}", name);
+
+    // Create a default preset
+    let preset = invers_core::models::FilmPreset {
+        name: name.clone(),
+        base_offsets: [0.0, 0.0, 0.0],
+        color_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        tone_curve: invers_core::models::ToneCurveParams {
+            curve_type: "neutral".to_string(),
+            strength: 0.5,
+            params: std::collections::HashMap::new(),
+        },
+        notes: Some(format!("Film preset: {}", name)),
+    };
+
+    // Serialize to YAML
+    let yaml_str = serde_yaml::to_string(&preset)
+        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
+
+    // Write to file
+    std::fs::write(&output, yaml_str)
+        .map_err(|e| format!("Failed to write preset file: {}", e))?;
+
+    println!("Preset created: {}", output.display());
+    println!("You can now edit this file to customize the parameters.");
+    println!();
+
     Ok(())
 }
 
@@ -655,8 +754,6 @@ fn cmd_diagnose(
     debug: bool,
 ) -> Result<(), String> {
     invers_core::config::log_config_usage();
-    let config_handle = invers_core::config::pipeline_config_handle();
-    let defaults = config_handle.config.defaults.clone();
 
     println!("========================================");
     println!("INVERS DIAGNOSTIC COMPARISON");
@@ -720,38 +817,18 @@ fn cmd_diagnose(
 
     // Step 5: Process with our pipeline
     println!("\n5. Processing with our pipeline...");
-    let options = invers_core::models::ConvertOptions {
-        input_paths: vec![original.clone()],
-        output_dir: std::path::PathBuf::from("."),
-        output_format: invers_core::models::OutputFormat::Tiff16,
-        working_colorspace: "linear-rec2020".to_string(),
-        bit_depth_policy: invers_core::models::BitDepthPolicy::Force16Bit,
+    let options = build_convert_options(
+        original.clone(),
+        std::path::PathBuf::from("."),
+        "tiff16",
+        "linear-rec2020".to_string(),
+        Some(base_estimation),
         film_preset,
-        scan_profile: None,
-        base_estimation: Some(base_estimation),
-        num_threads: None,
-        skip_tone_curve: no_tonecurve || defaults.skip_tone_curve,
-        skip_color_matrix: no_colormatrix || defaults.skip_color_matrix,
-        exposure_compensation: defaults.exposure_compensation * exposure,
+        no_tonecurve,
+        no_colormatrix,
+        exposure,
         debug,
-        enable_auto_levels: defaults.enable_auto_levels,
-        auto_levels_clip_percent: defaults.auto_levels_clip_percent,
-        enable_auto_color: defaults.enable_auto_color,
-        auto_color_strength: defaults.auto_color_strength,
-        auto_color_min_gain: defaults.auto_color_min_gain,
-        auto_color_max_gain: defaults.auto_color_max_gain,
-        base_brightest_percent: defaults.base_brightest_percent,
-        base_sampling_mode: defaults.base_sampling_mode,
-        inversion_mode: defaults.inversion_mode,
-        shadow_lift_mode: defaults.shadow_lift_mode,
-        shadow_lift_value: defaults.shadow_lift_value,
-        highlight_compression: defaults.highlight_compression,
-        enable_auto_exposure: defaults.enable_auto_exposure,
-        auto_exposure_target_median: defaults.auto_exposure_target_median,
-        auto_exposure_strength: defaults.auto_exposure_strength,
-        auto_exposure_min_gain: defaults.auto_exposure_min_gain,
-        auto_exposure_max_gain: defaults.auto_exposure_max_gain,
-    };
+    )?;
 
     let our_processed = invers_core::pipeline::process_image(decoded_original, &options)?;
     println!("   Processing complete!");
