@@ -5,9 +5,10 @@
 use eframe::egui;
 use invers_core::{
     decoders::{decode_image, DecodedImage},
-    models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams},
+    models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams, OutputFormat},
     pipeline::{estimate_base, process_image, ProcessedImage},
 };
+use invers_cli::determine_output_path;
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
@@ -57,8 +58,14 @@ struct InversApp {
     // Color matrix (3x3)
     color_matrix: [[f32; 3]; 3],
 
+    // Export options
+    output_format: OutputFormat,
+    output_colorspace: String,
+
     // UI state
     show_color_matrix: bool,
+    show_export_options: bool,
+    show_preset_manager: bool,
     processing_needed: bool,
     error_message: Option<String>,
     eyedropper_mode: bool,
@@ -95,7 +102,13 @@ impl Default for InversApp {
             // Identity matrix by default
             color_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
 
+            // Export options
+            output_format: OutputFormat::Tiff16,
+            output_colorspace: "linear-rec2020".to_string(),
+
             show_color_matrix: false,
+            show_export_options: false,
+            show_preset_manager: false,
             processing_needed: false,
             error_message: None,
             eyedropper_mode: false,
@@ -119,6 +132,10 @@ impl eframe::App for InversApp {
                         }
                         ui.close_menu();
                     }
+                    if ui.button("Export as...").clicked() {
+                        self.show_export_options = !self.show_export_options;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -127,6 +144,13 @@ impl eframe::App for InversApp {
 
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_color_matrix, "Show Color Matrix");
+                });
+
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("Presets").clicked() {
+                        self.show_preset_manager = !self.show_preset_manager;
+                        ui.close_menu();
+                    }
                 });
             });
         });
@@ -180,6 +204,26 @@ impl eframe::App for InversApp {
             if should_close {
                 self.error_message = None;
             }
+        }
+
+        // Export options window
+        if self.show_export_options {
+            egui::Window::new("Export Options")
+                .resizable(true)
+                .default_size([400.0, 300.0])
+                .show(ctx, |ui| {
+                    self.show_export_panel(ui);
+                });
+        }
+
+        // Preset manager window
+        if self.show_preset_manager {
+            egui::Window::new("Preset Manager")
+                .resizable(true)
+                .default_size([400.0, 400.0])
+                .show(ctx, |ui| {
+                    self.show_preset_panel(ui);
+                });
         }
     }
 }
@@ -762,6 +806,123 @@ impl InversApp {
                 path.file_name().unwrap().to_string_lossy()
             ));
         }
+    }
+
+    fn show_export_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label("Select export format and colorspace:");
+        ui.separator();
+
+        // Export format
+        ui.label("Format:");
+        if ui.selectable_label(self.output_format == OutputFormat::Tiff16, "TIFF 16-bit").clicked() {
+            self.output_format = OutputFormat::Tiff16;
+        }
+        if ui.selectable_label(self.output_format == OutputFormat::LinearDng, "Linear DNG").clicked() {
+            self.output_format = OutputFormat::LinearDng;
+        }
+
+        ui.separator();
+
+        // Colorspace
+        ui.label("Working colorspace:");
+        let colorspaces = vec!["linear-rec2020", "linear-srgb", "linear-adobe-rgb"];
+        for cs in colorspaces {
+            if ui.selectable_label(self.output_colorspace == cs, cs).clicked() {
+                self.output_colorspace = cs.to_string();
+            }
+        }
+
+        ui.separator();
+
+        // Export button
+        if let Some(ref loaded_path) = self.loaded_path {
+            if ui.button("Export Current Preview").clicked() {
+                if let Some(ref processed) = self.processed_result {
+                    let output_path = determine_output_path(
+                        &loaded_path,
+                        &Some(PathBuf::from(".")),
+                        match self.output_format {
+                            OutputFormat::Tiff16 => "tiff16",
+                            OutputFormat::LinearDng => "dng",
+                        },
+                    );
+
+                    if let Ok(path) = output_path {
+                        match invers_core::exporters::export_tiff16(processed, &path, None) {
+                            Ok(_) => {
+                                self.error_message = Some(format!("Exported to: {}", path.display()));
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("Export failed: {}", e));
+                            }
+                        }
+                    } else {
+                        self.error_message = Some("Invalid output path".to_string());
+                    }
+                } else {
+                    self.error_message = Some("No processed image to export".to_string());
+                }
+                self.show_export_options = false;
+            }
+        } else {
+            ui.label("Load an image first");
+        }
+    }
+
+    fn show_preset_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label("Preset management (load presets from files):");
+        ui.separator();
+
+        if ui.button("Load Film Preset...").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("YAML Presets", &["yml", "yaml"])
+                .pick_file()
+            {
+                match invers_core::presets::load_film_preset(&path) {
+                    Ok(preset) => {
+                        // Apply loaded preset
+                        self.base_offset_r = preset.base_offsets[0];
+                        self.base_offset_g = preset.base_offsets[1];
+                        self.base_offset_b = preset.base_offsets[2];
+                        self.color_matrix = preset.color_matrix;
+                        self.tone_curve_strength = preset.tone_curve.strength;
+
+                        self.processing_needed = true;
+                        self.error_message = Some(format!("Loaded preset: {}", preset.name));
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to load preset: {}", e));
+                    }
+                }
+            }
+        }
+
+        ui.separator();
+
+        if ui.button("List Available Presets").clicked() {
+            match invers_core::presets::get_presets_dir() {
+                Ok(dir) => {
+                    match invers_core::presets::list_film_presets(&dir) {
+                        Ok(presets) => {
+                            let list = presets.join(", ");
+                            self.error_message = Some(format!("Available: {}", list));
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("Failed to list presets: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Presets directory not found: {}", e));
+                }
+            }
+        }
+
+        ui.separator();
+        ui.label("Current preset parameters:");
+        ui.label(format!("Base offsets: [{:.3}, {:.3}, {:.3}]",
+            self.base_offset_r, self.base_offset_g, self.base_offset_b));
+        ui.label(format!("Tone strength: {:.3}", self.tone_curve_strength));
     }
 }
 

@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 invers-core = { path = "../invers-core" }
+invers-cli = { path = "../invers-cli" }
 
 # GUI framework
 eframe = "0.30"
