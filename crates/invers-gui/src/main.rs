@@ -12,6 +12,9 @@ use invers_cli::determine_output_path;
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
+    // Log which pipeline configuration is being loaded
+    invers_core::config::log_config_usage();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 800.0])
