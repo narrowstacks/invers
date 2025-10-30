@@ -1,28 +1,67 @@
-# Default pipeline configuration for Positize.
+# Default pipeline configuration for Invers.
 #
-# Edit the values in this file to tweak processing behaviour without rebuilding.
+# Edit the values in this file to tweak processing behavior without rebuilding.
 # All fields are optional: any omitted value falls back to the built-in default.
 
 defaults:
+  # Enable automatic level adjustment to optimize tonal range (true/false)
   enable_auto_levels: true
+
+  # Percentage of pixels to clip when computing auto levels (0.0-100.0). Higher values are more aggressive.
   auto_levels_clip_percent: 0.25
+
+  # Enable automatic white balance / color correction (true/false)
   enable_auto_color: true
+
+  # Strength of color correction adjustment (0.0-1.0+). Higher values apply stronger color correction.
   auto_color_strength: 0.6
+
+  # Minimum gain multiplier for color correction. Prevents over-darkening of individual channels.
   auto_color_min_gain: 0.7
+
+  # Maximum gain multiplier for color correction. Prevents over-brightening of individual channels.
   auto_color_max_gain: 1.3
+
+  # Percentage of brightest pixels to sample when estimating film base color (0.0-100.0)
   base_brightest_percent: 5.0
+
+  # Method for sampling pixels when estimating film base color. Options: Median, Mean
   base_sampling_mode: Median
+
+  # Method for inverting negative to positive. Options: Linear (simple 1.0 - pixel inversion)
   inversion_mode: Linear
+
+  # Method for lifting shadows in tone mapping. Options: Percentile (uses percentile-based lifting)
   shadow_lift_mode: Percentile
+
+  # Shadow lift amount as a percentile value (0.0-1.0). Higher values lift shadows more.
   shadow_lift_value: 0.02
-  highlight_compression: 1.0
+
+  # Highlight compression factor (0.5-2.0+). Values > 1.0 compress highlights, < 1.0 expand them.
+  highlight_compression: 0.5
+
+  # Enable automatic exposure adjustment to normalize image brightness (true/false)
   enable_auto_exposure: true
+
+  # Target median brightness for exposure adjustment (0.0-1.0, typically 0.25 for film)
   auto_exposure_target_median: 0.25
-  auto_exposure_strength: 1.0
+
+  # Strength of exposure correction adjustment (0.0-1.0). Controls how aggressively exposure is corrected.
+  auto_exposure_strength: 0
+
+  # Minimum gain multiplier for exposure adjustment. Prevents excessive darkening.
   auto_exposure_min_gain: 0.6
+
+  # Maximum gain multiplier for exposure adjustment. Prevents excessive brightening.
   auto_exposure_max_gain: 1.4
+
+  # Manual exposure compensation multiplier (0.5-2.0+). 1.0 = no adjustment.
   exposure_compensation: 1.0
+
+  # Skip applying film-specific tone curve during processing (true/false)
   skip_tone_curve: false
+
+  # Skip applying color correction matrix during processing (true/false)
   skip_color_matrix: false
 
 testing:
