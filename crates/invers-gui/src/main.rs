@@ -394,6 +394,81 @@ impl InversApp {
         }
     }
 
+    fn process_original_for_export(&self) -> Result<ProcessedImage, String> {
+        // Process the original full-resolution image with current parameters
+        let Some(ref original_image) = self.loaded_image else {
+            return Err("No original image loaded".to_string());
+        };
+
+        // Build base estimation from current parameters
+        let base = BaseEstimation {
+            roi: None,
+            medians: [self.base_r, self.base_g, self.base_b],
+            noise_stats: None,
+            auto_estimated: false,
+        };
+
+        // Build film preset with current parameters
+        let preset = FilmPreset {
+            name: "Custom".to_string(),
+            base_offsets: [self.base_offset_r, self.base_offset_g, self.base_offset_b],
+            color_matrix: self.color_matrix,
+            tone_curve: ToneCurveParams {
+                curve_type: "neutral".to_string(),
+                strength: self.tone_curve_strength,
+                params: std::collections::HashMap::new(),
+            },
+            notes: None,
+        };
+
+        // Build convert options
+        let defaults = invers_core::config::pipeline_config_handle()
+            .config
+            .defaults
+            .clone();
+
+        let options = ConvertOptions {
+            input_paths: vec![],
+            output_dir: PathBuf::from("."),
+            output_format: self.output_format,
+            working_colorspace: self.output_colorspace.clone(),
+            bit_depth_policy: invers_core::models::BitDepthPolicy::MatchInput,
+            film_preset: Some(preset),
+            scan_profile: None,
+            base_estimation: Some(base),
+            num_threads: None,
+            skip_tone_curve: self.skip_tone_curve || defaults.skip_tone_curve,
+            skip_color_matrix: self.skip_color_matrix || defaults.skip_color_matrix,
+            exposure_compensation: defaults.exposure_compensation * self.exposure_compensation,
+            debug: false,
+            enable_auto_levels: defaults.enable_auto_levels,
+            auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+            enable_auto_color: defaults.enable_auto_color,
+            auto_color_strength: defaults.auto_color_strength,
+            auto_color_min_gain: defaults.auto_color_min_gain,
+            auto_color_max_gain: defaults.auto_color_max_gain,
+            base_brightest_percent: defaults.base_brightest_percent,
+            base_sampling_mode: defaults.base_sampling_mode,
+            inversion_mode: defaults.inversion_mode,
+            shadow_lift_mode: defaults.shadow_lift_mode,
+            shadow_lift_value: defaults.shadow_lift_value,
+            highlight_compression: defaults.highlight_compression,
+            enable_auto_exposure: defaults.enable_auto_exposure,
+            auto_exposure_target_median: defaults.auto_exposure_target_median,
+            auto_exposure_strength: defaults.auto_exposure_strength,
+            auto_exposure_min_gain: defaults.auto_exposure_min_gain,
+            auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+        };
+
+        // Process the original full-resolution image
+        let mut result = process_image(original_image.clone(), &options)?;
+
+        // Apply white balance to the processed result
+        self.apply_white_balance(&mut result);
+
+        Ok(result)
+    }
+
     fn show_image_preview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if let Some(ref result) = self.processed_result {
             // Create or update texture
@@ -839,31 +914,39 @@ impl InversApp {
 
         // Export button
         if let Some(ref loaded_path) = self.loaded_path {
-            if ui.button("Export Current Preview").clicked() {
-                if let Some(ref processed) = self.processed_result {
-                    let output_path = determine_output_path(
-                        &loaded_path,
-                        &Some(PathBuf::from(".")),
-                        match self.output_format {
-                            OutputFormat::Tiff16 => "tiff16",
-                            OutputFormat::LinearDng => "dng",
-                        },
-                    );
+            if ui.button("Export Full Resolution Image").clicked() {
+                if let Some(ref _preview_result) = self.processed_result {
+                    // Process the original full-resolution image with current parameters
+                    match self.process_original_for_export() {
+                        Ok(processed) => {
+                            let output_path = determine_output_path(
+                                &loaded_path,
+                                &Some(PathBuf::from(".")),
+                                match self.output_format {
+                                    OutputFormat::Tiff16 => "tiff16",
+                                    OutputFormat::LinearDng => "dng",
+                                },
+                            );
 
-                    if let Ok(path) = output_path {
-                        match invers_core::exporters::export_tiff16(processed, &path, None) {
-                            Ok(_) => {
-                                self.error_message = Some(format!("Exported to: {}", path.display()));
-                            }
-                            Err(e) => {
-                                self.error_message = Some(format!("Export failed: {}", e));
+                            if let Ok(path) = output_path {
+                                match invers_core::exporters::export_tiff16(&processed, &path, None) {
+                                    Ok(_) => {
+                                        self.error_message = Some(format!("Exported to: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        self.error_message = Some(format!("Export failed: {}", e));
+                                    }
+                                }
+                            } else {
+                                self.error_message = Some("Invalid output path".to_string());
                             }
                         }
-                    } else {
-                        self.error_message = Some("Invalid output path".to_string());
+                        Err(e) => {
+                            self.error_message = Some(format!("Failed to process image for export: {}", e));
+                        }
                     }
                 } else {
-                    self.error_message = Some("No processed image to export".to_string());
+                    self.error_message = Some("No image loaded to export".to_string());
                 }
                 self.show_export_options = false;
             }
