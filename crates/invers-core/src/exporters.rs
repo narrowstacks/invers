@@ -6,6 +6,13 @@ use crate::pipeline::ProcessedImage;
 use std::path::Path;
 
 /// Export a processed image to TIFF format
+///
+/// Note: This exports the image data as-is (typically linear light).
+/// The image data should have already gone through the full processing pipeline
+/// including tone curves, color matrices, and exposure adjustments.
+///
+/// TIFF viewers that support linear workflows will display this correctly.
+/// For sRGB output, the pipeline should apply sRGB tone curve before export.
 pub fn export_tiff16<P: AsRef<Path>>(
     image: &ProcessedImage,
     path: P,
@@ -22,6 +29,8 @@ pub fn export_tiff16<P: AsRef<Path>>(
     }
 
     // Convert f32 (0.0-1.0) to u16 (0-65535)
+    // This is a simple linear scaling - the data should already be
+    // in the correct colorspace and tone-mapped by the pipeline
     let u16_data: Vec<u16> = image
         .data
         .iter()

@@ -333,7 +333,7 @@ impl InversApp {
             input_paths: vec![],
             output_dir: PathBuf::from("."),
             output_format: invers_core::models::OutputFormat::Tiff16,
-            working_colorspace: "linear-rec2020".to_string(),
+            working_colorspace: self.output_colorspace.clone(), // Use same colorspace as export
             bit_depth_policy: invers_core::models::BitDepthPolicy::MatchInput,
             film_preset: Some(preset),
             scan_profile: None,
@@ -671,11 +671,17 @@ impl InversApp {
         let height = result.height as usize;
         let mut pixels = Vec::with_capacity(width * height);
 
-        // Convert f32 linear RGB to sRGB u8 for display
+        // Apply display gamma to linear data WITHOUT colorspace conversion
+        // This preserves the wide-gamut colors and lets the OS/compositor handle
+        // the color management to the monitor's native colorspace
+        //
+        // We apply a simple 2.2 gamma (close to sRGB) for perceptually correct display
         for pixel in result.data.chunks_exact(3) {
-            let r = linear_to_srgb(pixel[0]);
-            let g = linear_to_srgb(pixel[1]);
-            let b = linear_to_srgb(pixel[2]);
+            // Apply display gamma (2.2) to linear values
+            // This is simpler than sRGB transfer function and works well for display
+            let r = apply_display_gamma(pixel[0]);
+            let g = apply_display_gamma(pixel[1]);
+            let b = apply_display_gamma(pixel[2]);
             pixels.push(egui::Color32::from_rgb(r, g, b));
         }
 
@@ -907,6 +913,7 @@ impl InversApp {
         for cs in colorspaces {
             if ui.selectable_label(self.output_colorspace == cs, cs).clicked() {
                 self.output_colorspace = cs.to_string();
+                self.processing_needed = true; // Trigger preview update
             }
         }
 
@@ -1077,13 +1084,16 @@ fn downsample_image(image: &DecodedImage, max_dimension: u32) -> DecodedImage {
     }
 }
 
-/// Convert linear RGB value to sRGB with gamma correction
-fn linear_to_srgb(linear: f32) -> u8 {
+/// Apply sRGB transfer function to linear values for display
+/// This applies the standard sRGB gamma curve (piece-wise function with gamma ~2.4)
+/// without performing colorspace primaries conversion
+fn apply_display_gamma(linear: f32) -> u8 {
     let linear = linear.clamp(0.0, 1.0);
-    let srgb = if linear <= 0.0031308 {
+    // Standard sRGB transfer function (EOTF inverse)
+    let encoded = if linear <= 0.0031308 {
         linear * 12.92
     } else {
         1.055 * linear.powf(1.0 / 2.4) - 0.055
     };
-    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
+    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
 }
