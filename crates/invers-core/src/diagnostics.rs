@@ -45,7 +45,7 @@ pub fn compute_statistics(data: &[f32], channels: u8) -> [ChannelStats; 3] {
     }
 
     let num_pixels = data.len() / 3;
-    
+
     // Pre-allocate with exact capacity to avoid reallocation
     let mut channel_data: [Vec<f32>; 3] = [
         Vec::with_capacity(num_pixels),
@@ -83,20 +83,20 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
 
     // Create a sorted copy for percentile calculations
     let mut sorted = data.to_vec();
-    
+
     // Single pass for min, max, and sum
     let mut min = f32::INFINITY;
     let mut max = f32::NEG_INFINITY;
     let mut sum = 0.0;
-    
+
     for &val in data {
         min = min.min(val);
         max = max.max(val);
         sum += val;
     }
-    
+
     let mean = sum / data.len() as f32;
-    
+
     // Use partial sort for median - only sort what we need
     let mid = sorted.len() / 2;
     sorted.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
@@ -109,7 +109,7 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
     // Compute percentiles efficiently using partial sorts
     let percentile_values = vec![1, 5, 25, 50, 75, 95, 99];
     let mut percentiles = Vec::with_capacity(percentile_values.len());
-    
+
     for p in percentile_values {
         let idx = ((p as f32 / 100.0) * (sorted.len() - 1) as f32).round() as usize;
         // Use select_nth_unstable for each percentile
@@ -134,7 +134,7 @@ pub fn compute_histograms(data: &[f32], channels: u8, num_bins: usize) -> [Histo
     }
 
     let num_pixels = data.len() / 3;
-    
+
     // Pre-allocate with exact capacity
     let mut channel_data: [Vec<f32>; 3] = [
         Vec::with_capacity(num_pixels),

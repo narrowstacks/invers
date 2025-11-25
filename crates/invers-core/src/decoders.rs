@@ -465,7 +465,7 @@ fn decode_png_gray8(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>, 
 
     // Pre-allocate for RGB output
     let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    
+
     // Convert to f32 and expand to RGB
     for &gray in bytes {
         let val = gray as f32 / 255.0;
@@ -490,7 +490,7 @@ fn decode_png_gray16(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>,
 
     // Pre-allocate for RGB output
     let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    
+
     // PNG 16-bit is big-endian
     for chunk in bytes.chunks_exact(2) {
         let gray16 = u16::from_be_bytes([chunk[0], chunk[1]]);
@@ -554,7 +554,7 @@ fn decode_png_rgba8(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>, 
 
     // Pre-allocate for RGB output
     let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    
+
     // Drop alpha, keep RGB
     for rgba in bytes.chunks_exact(4) {
         rgb_data.push(rgba[0] as f32 / 255.0);
@@ -578,7 +578,7 @@ fn decode_png_rgba16(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>,
 
     // Pre-allocate for RGB output
     let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    
+
     // PNG 16-bit is big-endian, drop alpha
     for rgba in bytes.chunks_exact(8) {
         let r = u16::from_be_bytes([rgba[0], rgba[1]]);

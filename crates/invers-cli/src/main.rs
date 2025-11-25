@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use invers_cli::{parse_roi, determine_output_path, build_convert_options};
+use invers_cli::{build_convert_options, determine_output_path, parse_roi};
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -511,7 +511,6 @@ fn cmd_analyze_base(
     Ok(())
 }
 
-
 fn cmd_batch(
     inputs: Vec<PathBuf>,
     base_from: Option<PathBuf>,
@@ -566,10 +565,7 @@ fn cmd_batch(
         None
     };
 
-    println!(
-        "\nProcessing {} files in parallel...\n",
-        inputs.len()
-    );
+    println!("\nProcessing {} files in parallel...\n", inputs.len());
 
     // Progress tracking
     let processed_count = AtomicUsize::new(0);
@@ -709,8 +705,10 @@ fn cmd_preset_show(preset: String) -> Result<(), String> {
     };
 
     println!("\nPreset: {}", preset_obj.name);
-    println!("Base Offsets (RGB): [{:.6}, {:.6}, {:.6}]",
-        preset_obj.base_offsets[0], preset_obj.base_offsets[1], preset_obj.base_offsets[2]);
+    println!(
+        "Base Offsets (RGB): [{:.6}, {:.6}, {:.6}]",
+        preset_obj.base_offsets[0], preset_obj.base_offsets[1], preset_obj.base_offsets[2]
+    );
 
     println!("\nTone Curve:");
     println!("  Type: {}", preset_obj.tone_curve.curve_type);
@@ -750,12 +748,11 @@ fn cmd_preset_create(output: PathBuf, name: String) -> Result<(), String> {
     };
 
     // Serialize to YAML
-    let yaml_str = serde_yaml::to_string(&preset)
-        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    let yaml_str =
+        serde_yaml::to_string(&preset).map_err(|e| format!("Failed to serialize preset: {}", e))?;
 
     // Write to file
-    std::fs::write(&output, yaml_str)
-        .map_err(|e| format!("Failed to write preset file: {}", e))?;
+    std::fs::write(&output, yaml_str).map_err(|e| format!("Failed to write preset file: {}", e))?;
 
     println!("Preset created: {}", output.display());
     println!("You can now edit this file to customize the parameters.");

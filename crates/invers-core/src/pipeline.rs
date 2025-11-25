@@ -114,14 +114,13 @@ pub fn process_image(
 
     // Step 3.2: Apply auto-color (neutralize color casts)
     if options.enable_auto_color {
-        let adjustments =
-            crate::auto_adjust::auto_color(
-                &mut data,
-                channels,
-                options.auto_color_strength,
-                options.auto_color_min_gain,
-                options.auto_color_max_gain,
-            );
+        let adjustments = crate::auto_adjust::auto_color(
+            &mut data,
+            channels,
+            options.auto_color_strength,
+            options.auto_color_min_gain,
+            options.auto_color_max_gain,
+        );
 
         if options.debug {
             eprintln!(
@@ -250,10 +249,11 @@ pub fn estimate_base(
     }
 
     if roi.is_none() {
-        candidates.sort_by(|a, b| b
-            .brightness
-            .partial_cmp(&a.brightness)
-            .unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.brightness
+                .partial_cmp(&a.brightness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     let mut fallback: Option<BaseEstimation> = None;
@@ -271,7 +271,10 @@ pub fn estimate_base(
 
         let roi_pixels = extract_roi_pixels(image, x, y, width, height);
         if roi_pixels.is_empty() {
-            eprintln!("[BASE] Skipping {} candidate: ROI is empty", candidate.label);
+            eprintln!(
+                "[BASE] Skipping {} candidate: ROI is empty",
+                candidate.label
+            );
             continue;
         }
 
@@ -372,10 +375,7 @@ fn base_sample_fraction() -> f32 {
     fraction.clamp(MIN_BASE_SAMPLE_FRACTION, MAX_BASE_SAMPLE_FRACTION)
 }
 
-fn compute_base_stats(
-    roi_pixels: &[[f32; 3]],
-    fraction: f32,
-) -> (usize, f32, [f32; 3], [f32; 3]) {
+fn compute_base_stats(roi_pixels: &[[f32; 3]], fraction: f32) -> (usize, f32, [f32; 3], [f32; 3]) {
     let mut num_brightest = (roi_pixels.len() as f32 * fraction).ceil() as usize;
     num_brightest = num_brightest.max(10).min(roi_pixels.len());
     let percentage =
@@ -413,7 +413,10 @@ fn validate_base_candidate(
     if brightness < BASE_VALIDATION_MIN_BRIGHTNESS {
         return (
             false,
-            format!("brightness {:.3} < {:.3}", brightness, BASE_VALIDATION_MIN_BRIGHTNESS),
+            format!(
+                "brightness {:.3} < {:.3}",
+                brightness, BASE_VALIDATION_MIN_BRIGHTNESS
+            ),
         );
     }
 
@@ -423,7 +426,10 @@ fn validate_base_candidate(
     if max_noise > adaptive_noise_threshold {
         return (
             false,
-            format!("noise {:.4} exceeds adaptive threshold {:.4}", max_noise, adaptive_noise_threshold),
+            format!(
+                "noise {:.4} exceeds adaptive threshold {:.4}",
+                max_noise, adaptive_noise_threshold
+            ),
         );
     }
 
@@ -461,7 +467,10 @@ fn validate_base_candidate(
     }
 
     if r < g || g < b {
-        return (false, "channel ordering not orange-mask like (R >= G >= B expected)".to_string());
+        return (
+            false,
+            "channel ordering not orange-mask like (R >= G >= B expected)".to_string(),
+        );
     }
 
     (true, "within expected range".to_string())
@@ -483,7 +492,7 @@ fn extract_roi_pixels(
         let row_start = (row * image.width + x) as usize * 3;
         let row_pixels = ((x + width).min(image.width) - x) as usize;
         let row_end = row_start + row_pixels * 3;
-        
+
         if row_end <= image.data.len() {
             // Process entire row at once for better cache locality
             for pixel in image.data[row_start..row_end].chunks_exact(3) {
@@ -514,11 +523,10 @@ fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize
     // Use partial sort to find top N brightest pixels (much faster than full sort)
     let n = num_pixels.min(brightness_pixels.len());
     let threshold_idx = brightness_pixels.len().saturating_sub(n);
-    brightness_pixels.select_nth_unstable_by(
-        threshold_idx,
-        |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
-    );
-    
+    brightness_pixels.select_nth_unstable_by(threshold_idx, |a, b| {
+        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     // The brightest N pixels are now in the last n positions
     let brightest_slice = &brightness_pixels[threshold_idx..];
 
@@ -527,7 +535,7 @@ fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize
     let mut r_values: Vec<f32> = Vec::with_capacity(n);
     let mut g_values: Vec<f32> = Vec::with_capacity(n);
     let mut b_values: Vec<f32> = Vec::with_capacity(n);
-    
+
     for (_, pixel) in brightest_slice {
         r_values.push(pixel[0]);
         g_values.push(pixel[1]);
@@ -549,18 +557,24 @@ fn compute_median(values: &mut [f32]) -> f32 {
 
     let len = values.len();
     let mid = len / 2;
-    
+
     if len.is_multiple_of(2) {
         // Even length: average of two middle values
         // Use select_nth_unstable to partially sort only what we need
-        values.select_nth_unstable_by(mid - 1, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.select_nth_unstable_by(mid - 1, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let lower = values[mid - 1];
-        values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let upper = values[mid];
         (lower + upper) / 2.0
     } else {
         // Odd length: middle value
-        values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
         values[mid]
     }
 }
@@ -672,7 +686,8 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
     let center_y = (image.height - center_height) / 2;
 
     if center_width > 20 && center_height > 20 {
-        let center_brightness = sample_region_brightness(image, center_x, center_y, center_width, center_height);
+        let center_brightness =
+            sample_region_brightness(image, center_x, center_y, center_width, center_height);
         eprintln!("[BASE] Center region brightness: {:.4}", center_brightness);
         result.push(BaseRoiCandidate::new(
             (center_x, center_y, center_width, center_height),
@@ -699,7 +714,7 @@ fn sample_region_brightness(image: &DecodedImage, x: u32, y: u32, width: u32, he
     for row in y..y_end {
         let row_start = (row * image.width + x) as usize * 3;
         let row_end = (row * image.width + x_end) as usize * 3;
-        
+
         if row_end <= image.data.len() {
             // Process entire row at once for better cache locality
             for pixel in image.data[row_start..row_end].chunks_exact(3) {

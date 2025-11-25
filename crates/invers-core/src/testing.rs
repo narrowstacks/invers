@@ -365,7 +365,9 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
                                     for &inversion_mode in &grid.inversion_mode {
                                         for &shadow_lift_mode in &grid.shadow_lift_mode {
                                             for &shadow_lift_value in &grid.shadow_lift_value {
-                                                for &tone_curve_strength in &grid.tone_curve_strength {
+                                                for &tone_curve_strength in
+                                                    &grid.tone_curve_strength
+                                                {
                                                     for &exposure_compensation in
                                                         &grid.exposure_compensation
                                                     {
@@ -383,39 +385,39 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
                                                             inversion_mode,
                                                             shadow_lift_mode,
                                                             shadow_lift_value,
-                                                    highlight_compression: 1.0,
-                                                    enable_auto_exposure: true,
-                                                    auto_exposure_target_median: 0.25,
-                                                    auto_exposure_strength: 1.0,
-                                                    auto_exposure_min_gain: 0.6,
-                                                    auto_exposure_max_gain: 1.4,
-                                                    tone_curve_strength,
-                                                    skip_tone_curve: false,
-                                                    exposure_compensation,
-                                                };
+                                                            highlight_compression: 1.0,
+                                                            enable_auto_exposure: true,
+                                                            auto_exposure_target_median: 0.25,
+                                                            auto_exposure_strength: 1.0,
+                                                            auto_exposure_min_gain: 0.6,
+                                                            auto_exposure_max_gain: 1.4,
+                                                            tone_curve_strength,
+                                                            skip_tone_curve: false,
+                                                            exposure_compensation,
+                                                        };
 
-                                                match run_parameter_test(
-                                                    original_path,
-                                                    reference_path,
-                                                    &params,
-                                                    None::<&Path>,
-                                                ) {
-                                                    Ok(result) => {
-                                                        if total_tests % 10 == 0 {
-                                                            eprintln!(
+                                                        match run_parameter_test(
+                                                            original_path,
+                                                            reference_path,
+                                                            &params,
+                                                            None::<&Path>,
+                                                        ) {
+                                                            Ok(result) => {
+                                                                if total_tests % 10 == 0 {
+                                                                    eprintln!(
                                                                 "[GRID SEARCH] Progress: {}/{}",
                                                                 total_tests, total_combinations
                                                             );
-                                                        }
-                                                        results.push(result);
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!(
+                                                                }
+                                                                results.push(result);
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!(
                                                             "[GRID SEARCH] Test {} failed: {}",
                                                             total_tests, e
                                                         );
-                                                    }
-                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -563,7 +565,9 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
                                     for &inversion_mode in &grid.inversion_mode {
                                         for &shadow_lift_mode in &grid.shadow_lift_mode {
                                             for &shadow_lift_value in &grid.shadow_lift_value {
-                                                for &tone_curve_strength in &grid.tone_curve_strength {
+                                                for &tone_curve_strength in
+                                                    &grid.tone_curve_strength
+                                                {
                                                     for &exposure_compensation in
                                                         &grid.exposure_compensation
                                                     {
@@ -579,16 +583,16 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
                                                             inversion_mode,
                                                             shadow_lift_mode,
                                                             shadow_lift_value,
-                                                    highlight_compression: 1.0,
-                                                    enable_auto_exposure: true,
-                                                    auto_exposure_target_median: 0.25,
-                                                    auto_exposure_strength: 1.0,
-                                                    auto_exposure_min_gain: 0.6,
-                                                    auto_exposure_max_gain: 1.4,
-                                                    tone_curve_strength,
-                                                    skip_tone_curve: false,
-                                                    exposure_compensation,
-                                                });
+                                                            highlight_compression: 1.0,
+                                                            enable_auto_exposure: true,
+                                                            auto_exposure_target_median: 0.25,
+                                                            auto_exposure_strength: 1.0,
+                                                            auto_exposure_min_gain: 0.6,
+                                                            auto_exposure_max_gain: 1.4,
+                                                            tone_curve_strength,
+                                                            skip_tone_curve: false,
+                                                            exposure_compensation,
+                                                        });
                                                     }
                                                 }
                                             }

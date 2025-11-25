@@ -5,11 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Once, OnceLock};
 
 /// Canonical list of candidate config file names we search for on disk.
-const CONFIG_FILENAMES: &[&str] = &[
-    "pipeline.yml",
-    "pipeline.yaml",
-    "pipeline_defaults.yml",
-];
+const CONFIG_FILENAMES: &[&str] = &["pipeline.yml", "pipeline.yaml", "pipeline_defaults.yml"];
 
 /// Public handle that stores the loaded configuration, its source path, and warnings.
 pub struct PipelineConfigHandle {

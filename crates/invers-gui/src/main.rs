@@ -3,12 +3,12 @@
 //! Interactive GUI for film negative to positive conversion using egui.
 
 use eframe::egui;
+use invers_cli::determine_output_path;
 use invers_core::{
     decoders::{decode_image, DecodedImage},
-    models::{BaseEstimation, ConvertOptions, FilmPreset, ToneCurveParams, OutputFormat},
+    models::{BaseEstimation, ConvertOptions, FilmPreset, OutputFormat, ToneCurveParams},
     pipeline::{estimate_base, process_image, ProcessedImage},
 };
-use invers_cli::determine_output_path;
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
@@ -906,10 +906,16 @@ impl InversApp {
 
         // Export format
         ui.label("Format:");
-        if ui.selectable_label(self.output_format == OutputFormat::Tiff16, "TIFF 16-bit").clicked() {
+        if ui
+            .selectable_label(self.output_format == OutputFormat::Tiff16, "TIFF 16-bit")
+            .clicked()
+        {
             self.output_format = OutputFormat::Tiff16;
         }
-        if ui.selectable_label(self.output_format == OutputFormat::LinearDng, "Linear DNG").clicked() {
+        if ui
+            .selectable_label(self.output_format == OutputFormat::LinearDng, "Linear DNG")
+            .clicked()
+        {
             self.output_format = OutputFormat::LinearDng;
         }
 
@@ -919,7 +925,10 @@ impl InversApp {
         ui.label("Working colorspace:");
         let colorspaces = vec!["linear-rec2020", "linear-srgb", "linear-adobe-rgb"];
         for cs in colorspaces {
-            if ui.selectable_label(self.output_colorspace == cs, cs).clicked() {
+            if ui
+                .selectable_label(self.output_colorspace == cs, cs)
+                .clicked()
+            {
                 self.output_colorspace = cs.to_string();
                 self.processing_needed = true; // Trigger preview update
             }
@@ -944,9 +953,11 @@ impl InversApp {
                             );
 
                             if let Ok(path) = output_path {
-                                match invers_core::exporters::export_tiff16(&processed, &path, None) {
+                                match invers_core::exporters::export_tiff16(&processed, &path, None)
+                                {
                                     Ok(_) => {
-                                        self.error_message = Some(format!("Exported to: {}", path.display()));
+                                        self.error_message =
+                                            Some(format!("Exported to: {}", path.display()));
                                     }
                                     Err(e) => {
                                         self.error_message = Some(format!("Export failed: {}", e));
@@ -957,7 +968,8 @@ impl InversApp {
                             }
                         }
                         Err(e) => {
-                            self.error_message = Some(format!("Failed to process image for export: {}", e));
+                            self.error_message =
+                                Some(format!("Failed to process image for export: {}", e));
                         }
                     }
                 } else {
@@ -1002,17 +1014,15 @@ impl InversApp {
 
         if ui.button("List Available Presets").clicked() {
             match invers_core::presets::get_presets_dir() {
-                Ok(dir) => {
-                    match invers_core::presets::list_film_presets(&dir) {
-                        Ok(presets) => {
-                            let list = presets.join(", ");
-                            self.error_message = Some(format!("Available: {}", list));
-                        }
-                        Err(e) => {
-                            self.error_message = Some(format!("Failed to list presets: {}", e));
-                        }
+                Ok(dir) => match invers_core::presets::list_film_presets(&dir) {
+                    Ok(presets) => {
+                        let list = presets.join(", ");
+                        self.error_message = Some(format!("Available: {}", list));
                     }
-                }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to list presets: {}", e));
+                    }
+                },
                 Err(e) => {
                     self.error_message = Some(format!("Presets directory not found: {}", e));
                 }
@@ -1021,8 +1031,10 @@ impl InversApp {
 
         ui.separator();
         ui.label("Current preset parameters:");
-        ui.label(format!("Base offsets: [{:.3}, {:.3}, {:.3}]",
-            self.base_offset_r, self.base_offset_g, self.base_offset_b));
+        ui.label(format!(
+            "Base offsets: [{:.3}, {:.3}, {:.3}]",
+            self.base_offset_r, self.base_offset_g, self.base_offset_b
+        ));
         ui.label(format!("Tone strength: {:.3}", self.tone_curve_strength));
     }
 }

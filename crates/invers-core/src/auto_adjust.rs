@@ -55,12 +55,12 @@ pub fn auto_levels_with_mode(
 
     // Single pass to build all three histograms
     for pixel in data.chunks_exact(3) {
-        let r_bucket = ((pixel[0].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize)
-            .min(NUM_BUCKETS - 1);
-        let g_bucket = ((pixel[1].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize)
-            .min(NUM_BUCKETS - 1);
-        let b_bucket = ((pixel[2].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize)
-            .min(NUM_BUCKETS - 1);
+        let r_bucket =
+            ((pixel[0].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
+        let g_bucket =
+            ((pixel[1].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
+        let b_bucket =
+            ((pixel[2].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
         r_hist[r_bucket] += 1;
         g_hist[g_bucket] += 1;
         b_hist[b_bucket] += 1;
@@ -69,9 +69,12 @@ pub fn auto_levels_with_mode(
     let num_pixels = data.len() / 3;
 
     // Compute initial min/max for each channel with clipping using histograms
-    let (mut r_min, mut r_max) = compute_clipped_range_from_histogram(&r_hist, num_pixels, clip_percent);
-    let (mut g_min, mut g_max) = compute_clipped_range_from_histogram(&g_hist, num_pixels, clip_percent);
-    let (mut b_min, mut b_max) = compute_clipped_range_from_histogram(&b_hist, num_pixels, clip_percent);
+    let (mut r_min, mut r_max) =
+        compute_clipped_range_from_histogram(&r_hist, num_pixels, clip_percent);
+    let (mut g_min, mut g_max) =
+        compute_clipped_range_from_histogram(&g_hist, num_pixels, clip_percent);
+    let (mut b_min, mut b_max) =
+        compute_clipped_range_from_histogram(&b_hist, num_pixels, clip_percent);
 
     // Apply mode-specific adjustments
     match mode {
@@ -353,8 +356,8 @@ fn find_percentile_via_histogram(data: &[f32], percentile: f32) -> f32 {
     // Build histogram
     let mut histogram = vec![0u32; NUM_BUCKETS];
     for &value in data {
-        let bucket = ((value.clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize)
-            .min(NUM_BUCKETS - 1);
+        let bucket =
+            ((value.clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
         histogram[bucket] += 1;
     }
 
@@ -403,7 +406,7 @@ pub fn auto_exposure(
     // Pre-allocate luminance buffer with exact capacity
     let num_pixels = data.len() / 3;
     let mut luminances = Vec::with_capacity(num_pixels);
-    
+
     // Collect luminance samples (Rec.709 weights)
     for pixel in data.chunks_exact(3) {
         let lum = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
@@ -416,9 +419,7 @@ pub fn auto_exposure(
 
     // Use select_nth_unstable for efficient median finding
     let mid = luminances.len() / 2;
-    luminances.select_nth_unstable_by(mid, |a, b| {
-        a.partial_cmp(b).unwrap_or(Ordering::Equal)
-    });
+    luminances.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
     let median = luminances[mid];
 
     if !median.is_finite() || median <= 1e-6 {
@@ -476,7 +477,7 @@ mod tests {
             0.5, 0.4, 0.4, 0.5, 0.4, 0.4, 0.5, 0.4, 0.4,
         ];
 
-    let adjustments = auto_color(&mut data, 3, 1.0, 0.7, 1.3);
+        let adjustments = auto_color(&mut data, 3, 1.0, 0.7, 1.3);
 
         println!("Color adjustments: {:?}", adjustments);
         println!("Corrected data: {:?}", data);
