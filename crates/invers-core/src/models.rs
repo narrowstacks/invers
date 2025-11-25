@@ -26,15 +26,52 @@ pub struct FilmPreset {
 /// Tone curve parameters for positive conversion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToneCurveParams {
-    /// Curve type (e.g., "neutral", "s-curve", "linear")
+    /// Curve type (e.g., "neutral", "s-curve", "linear", "asymmetric")
     pub curve_type: String,
 
-    /// Curve strength/intensity (0.0 - 1.0)
+    /// Overall curve strength/intensity (0.0 - 1.0)
+    /// For "asymmetric" curve type, this is a blend factor with linear
     pub strength: f32,
+
+    /// Shadow (toe) curve strength (0.0 - 1.0)
+    /// Higher values lift shadows more aggressively
+    #[serde(default = "default_toe_strength")]
+    pub toe_strength: f32,
+
+    /// Highlight (shoulder) curve strength (0.0 - 1.0)
+    /// Higher values compress highlights more aggressively
+    #[serde(default = "default_shoulder_strength")]
+    pub shoulder_strength: f32,
+
+    /// Where shadows transition to midtones (0.0 - 0.5)
+    /// Default 0.25 means toe region extends to 25% brightness
+    #[serde(default = "default_toe_length")]
+    pub toe_length: f32,
+
+    /// Where midtones transition to highlights (0.5 - 1.0)
+    /// Default 0.75 means shoulder region starts at 75% brightness
+    #[serde(default = "default_shoulder_start")]
+    pub shoulder_start: f32,
 
     /// Additional curve-specific parameters
     #[serde(default)]
     pub params: std::collections::HashMap<String, f32>,
+}
+
+fn default_toe_strength() -> f32 {
+    0.4
+}
+
+fn default_shoulder_strength() -> f32 {
+    0.3
+}
+
+fn default_toe_length() -> f32 {
+    0.25
+}
+
+fn default_shoulder_start() -> f32 {
+    0.75
 }
 
 /// Scan profile defining capture source characteristics
@@ -328,6 +365,10 @@ impl Default for ToneCurveParams {
         Self {
             curve_type: "neutral".to_string(),
             strength: 0.5,
+            toe_strength: default_toe_strength(),
+            shoulder_strength: default_shoulder_strength(),
+            toe_length: default_toe_length(),
+            shoulder_start: default_shoulder_start(),
             params: std::collections::HashMap::new(),
         }
     }

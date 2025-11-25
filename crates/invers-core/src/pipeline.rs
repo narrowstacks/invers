@@ -5,6 +5,7 @@
 use crate::config;
 use crate::decoders::DecodedImage;
 use crate::models::{BaseEstimation, ConvertOptions};
+use rayon::prelude::*;
 
 /// Prevent values from ever hitting absolute black/white while retaining full range.
 const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
@@ -386,6 +387,21 @@ fn compute_base_stats(
     (num_brightest, percentage, medians, noise_stats)
 }
 
+/// Detect if the image appears to be B&W based on channel similarity
+fn is_likely_bw(medians: &[f32; 3]) -> bool {
+    let [r, g, b] = *medians;
+    let avg = (r + g + b) / 3.0;
+    if avg <= 0.0 {
+        return false;
+    }
+    // Check if all channels are within 15% of the average (low chroma)
+    let deviation_threshold = 0.15;
+    let r_dev = (r - avg).abs() / avg;
+    let g_dev = (g - avg).abs() / avg;
+    let b_dev = (b - avg).abs() / avg;
+    r_dev < deviation_threshold && g_dev < deviation_threshold && b_dev < deviation_threshold
+}
+
 fn validate_base_candidate(
     medians: &[f32; 3],
     noise: &[f32; 3],
@@ -401,10 +417,13 @@ fn validate_base_candidate(
         );
     }
 
-    if max_noise > BASE_VALIDATION_MAX_NOISE {
+    // Adaptive noise threshold: scale based on brightness
+    // Higher brightness regions tend to have more visible noise in scans
+    let adaptive_noise_threshold = BASE_VALIDATION_MAX_NOISE * (1.0 + brightness * 0.5);
+    if max_noise > adaptive_noise_threshold {
         return (
             false,
-            format!("noise {:.4} exceeds {:.4}", max_noise, BASE_VALIDATION_MAX_NOISE),
+            format!("noise {:.4} exceeds adaptive threshold {:.4}", max_noise, adaptive_noise_threshold),
         );
     }
 
@@ -416,6 +435,14 @@ fn validate_base_candidate(
         return (false, "median channel <= 0".to_string());
     }
 
+    // Check if this appears to be B&W film
+    let is_bw = is_likely_bw(medians);
+    if is_bw {
+        eprintln!("[BASE]   detected B&W film (low chroma), skipping orange mask validation");
+        return (true, "B&W film - all channels similar".to_string());
+    }
+
+    // Color film: validate orange mask characteristics
     let rg_ratio = r / g;
     let gb_ratio = g / b;
 
@@ -631,10 +658,30 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
         candidates[0].0, candidates[1].0, candidates[2].0, candidates[3].0
     );
 
-    candidates
+    // Create candidates from borders
+    let mut result: Vec<BaseRoiCandidate> = candidates
         .iter()
         .map(|(brightness, rect, label)| BaseRoiCandidate::new(*rect, *brightness, label))
-        .collect()
+        .collect();
+
+    // Add center region as a fallback candidate (for full-frame images)
+    // Use a smaller center sample (10% of image) for potential sky/highlight areas
+    let center_width = image.width / 10;
+    let center_height = image.height / 10;
+    let center_x = (image.width - center_width) / 2;
+    let center_y = (image.height - center_height) / 2;
+
+    if center_width > 20 && center_height > 20 {
+        let center_brightness = sample_region_brightness(image, center_x, center_y, center_width, center_height);
+        eprintln!("[BASE] Center region brightness: {:.4}", center_brightness);
+        result.push(BaseRoiCandidate::new(
+            (center_x, center_y, center_width, center_height),
+            center_brightness,
+            "center",
+        ));
+    }
+
+    result
 }
 
 /// Sample the average brightness of a region with color-aware weighting
@@ -786,6 +833,10 @@ pub fn apply_tone_curve(data: &mut [f32], curve_params: &crate::models::ToneCurv
         "linear" => {
             // No transformation needed
         }
+        "asymmetric" => {
+            // Apply asymmetric film-like curve with separate toe/shoulder controls
+            apply_asymmetric_curve(data, curve_params);
+        }
         "neutral" | "s-curve" => {
             // Apply S-curve with configurable strength
             apply_s_curve(data, curve_params.strength);
@@ -799,6 +850,8 @@ pub fn apply_tone_curve(data: &mut [f32], curve_params: &crate::models::ToneCurv
 
 /// Apply S-curve tone mapping for natural film-like contrast
 /// Strength: 0.0 = no curve (linear), 1.0 = maximum curve
+///
+/// Uses parallel processing for large images (>100k values)
 fn apply_s_curve(data: &mut [f32], strength: f32) {
     // Clamp strength to valid range
     let strength = strength.clamp(0.0, 1.0);
@@ -808,10 +861,21 @@ fn apply_s_curve(data: &mut [f32], strength: f32) {
         return;
     }
 
-    // S-curve using a smoothstep-like function with adjustable strength
-    // Formula: smoothstep with variable steepness
-    for value in data.iter_mut() {
-        *value = apply_s_curve_point(*value, strength);
+    const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
+
+    if data.len() >= PARALLEL_THRESHOLD {
+        // Parallel processing for large images
+        const CHUNK_SIZE: usize = 256 * 3;
+        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+            for value in chunk.iter_mut() {
+                *value = apply_s_curve_point(*value, strength);
+            }
+        });
+    } else {
+        // Sequential for small images
+        for value in data.iter_mut() {
+            *value = apply_s_curve_point(*value, strength);
+        }
     }
 }
 
@@ -849,28 +913,145 @@ fn apply_s_curve_point(x: f32, strength: f32) -> f32 {
     clamp_to_working_range(result)
 }
 
+/// Apply asymmetric film-like tone curve
+///
+/// This curve has three distinct regions:
+/// - Toe (shadows): Lifts shadows using a gamma-like curve
+/// - Mid (linear): Passes through unchanged for natural midtones
+/// - Shoulder (highlights): Compresses highlights using soft-clip
+///
+/// The result is more film-like than symmetric S-curves because real film
+/// has different response characteristics in shadows vs highlights.
+///
+/// Uses parallel processing for large images (>100k values)
+fn apply_asymmetric_curve(data: &mut [f32], params: &crate::models::ToneCurveParams) {
+    let strength = params.strength.clamp(0.0, 1.0);
+
+    if strength < 0.01 {
+        return; // Effectively linear
+    }
+
+    // Clamp parameters to valid ranges
+    let toe_strength = params.toe_strength.clamp(0.0, 1.0);
+    let shoulder_strength = params.shoulder_strength.clamp(0.0, 1.0);
+    let toe_length = params.toe_length.clamp(0.05, 0.45);
+    let shoulder_start = params.shoulder_start.clamp(0.55, 0.95);
+
+    const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
+
+    if data.len() >= PARALLEL_THRESHOLD {
+        // Parallel processing for large images
+        const CHUNK_SIZE: usize = 256 * 3;
+        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+            for value in chunk.iter_mut() {
+                let curved = apply_asymmetric_curve_point(
+                    *value,
+                    toe_strength,
+                    shoulder_strength,
+                    toe_length,
+                    shoulder_start,
+                );
+                *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
+            }
+        });
+    } else {
+        // Sequential for small images
+        for value in data.iter_mut() {
+            let curved = apply_asymmetric_curve_point(
+                *value,
+                toe_strength,
+                shoulder_strength,
+                toe_length,
+                shoulder_start,
+            );
+            *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
+        }
+    }
+}
+
+/// Apply asymmetric curve transformation to a single value
+///
+/// Implements a piecewise curve:
+/// - x < toe_length: Toe region with shadow lift (gamma < 1)
+/// - toe_length <= x <= shoulder_start: Linear passthrough
+/// - x > shoulder_start: Shoulder region with highlight compression
+fn apply_asymmetric_curve_point(
+    x: f32,
+    toe_strength: f32,
+    shoulder_strength: f32,
+    toe_length: f32,
+    shoulder_start: f32,
+) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+
+    if x < toe_length {
+        // Toe region: lift shadows
+        // Use power function: output = toe_length * (x / toe_length)^(1/gamma)
+        // where gamma > 1 for shadow lift (we use 1/(1 + toe_strength))
+        let gamma = 1.0 / (1.0 + toe_strength * 1.5);
+        let normalized = x / toe_length;
+        let lifted = normalized.powf(gamma);
+
+        // Scale back to toe_length and apply smooth transition
+        // The output at toe_length should equal toe_length for continuity
+        toe_length * lifted
+    } else if x > shoulder_start {
+        // Shoulder region: compress highlights
+        // Use soft-clip: output = shoulder_start + (1 - shoulder_start) * (1 - (1 - t)^gamma)
+        // where t = (x - shoulder_start) / (1 - shoulder_start)
+        let gamma = 1.0 + shoulder_strength * 2.0;
+        let range = 1.0 - shoulder_start;
+        let normalized = (x - shoulder_start) / range;
+        let compressed = 1.0 - (1.0 - normalized).powf(gamma);
+
+        // Scale back to remaining range
+        shoulder_start + range * compressed
+    } else {
+        // Linear mid region: pass through unchanged
+        x
+    }
+}
+
 /// Apply color correction matrix
 /// Performs 3x3 matrix multiplication on RGB pixels
+///
+/// Uses parallel processing for large images (>100k pixels)
 pub fn apply_color_matrix(data: &mut [f32], matrix: &[[f32; 3]; 3], channels: u8) {
     if channels != 3 {
         return; // Only works for RGB
     }
 
-    // Process each RGB pixel
-    for pixel in data.chunks_exact_mut(3) {
-        let r = pixel[0];
-        let g = pixel[1];
-        let b = pixel[2];
+    let num_pixels = data.len() / 3;
+    const PARALLEL_THRESHOLD: usize = 100_000; // Use parallelism for >100k pixels
 
-        // Matrix multiplication: output = matrix * input
-        // [R'] = [m00 m01 m02] [R]
-        // [G']   [m10 m11 m12] [G]
-        // [B']   [m20 m21 m22] [B]
-
-        pixel[0] = clamp_to_working_range(matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b);
-        pixel[1] = clamp_to_working_range(matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b);
-        pixel[2] = clamp_to_working_range(matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b);
+    if num_pixels >= PARALLEL_THRESHOLD {
+        // Parallel processing for large images
+        // Process in chunks of 256 pixels (768 f32s) for good cache locality
+        const CHUNK_SIZE: usize = 256 * 3;
+        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+            for pixel in chunk.chunks_exact_mut(3) {
+                apply_color_matrix_to_pixel(pixel, matrix);
+            }
+        });
+    } else {
+        // Sequential processing for small images
+        for pixel in data.chunks_exact_mut(3) {
+            apply_color_matrix_to_pixel(pixel, matrix);
+        }
     }
+}
+
+/// Apply color matrix to a single pixel
+#[inline(always)]
+fn apply_color_matrix_to_pixel(pixel: &mut [f32], matrix: &[[f32; 3]; 3]) {
+    let r = pixel[0];
+    let g = pixel[1];
+    let b = pixel[2];
+
+    // Matrix multiplication: output = matrix * input
+    pixel[0] = clamp_to_working_range(matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b);
+    pixel[1] = clamp_to_working_range(matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b);
+    pixel[2] = clamp_to_working_range(matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b);
 }
 
 /// Clamp all values into the working range to avoid clipped blacks or whites.

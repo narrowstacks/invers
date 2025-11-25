@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use invers_cli::{parse_roi, determine_output_path, build_convert_options};
+use rayon::prelude::*;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Parser)]
 #[command(name = "invers")]
@@ -516,128 +518,135 @@ fn cmd_batch(
     preset: Option<PathBuf>,
     export: String,
     out: Option<PathBuf>,
-    _threads: Option<usize>,
+    threads: Option<usize>,
 ) -> Result<(), String> {
+    invers_core::config::log_config_usage();
+
     if inputs.is_empty() {
         return Err("No input files specified".to_string());
     }
 
-    invers_core::config::log_config_usage();
-    println!("========================================");
-    println!("BATCH PROCESSING");
-    println!("========================================\n");
+    // Configure thread pool if specified
+    if let Some(num_threads) = threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .map_err(|e| format!("Failed to configure thread pool: {}", e))?;
+        println!("Using {} threads for parallel processing", num_threads);
+    }
 
-    // Load base estimation if provided
-    let base_estimation: Option<invers_core::models::BaseEstimation> = if let Some(base_path) = base_from {
-        println!("Loading base estimation from: {}", base_path.display());
-        let json_str = std::fs::read_to_string(&base_path)
-            .map_err(|e| format!("Failed to read base file: {}", e))?;
-        Some(serde_json::from_str(&json_str)
-            .map_err(|e| format!("Failed to parse base estimation: {}", e))?)
+    // Determine output directory
+    let output_dir = out.clone().unwrap_or_else(|| PathBuf::from("."));
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    // Load shared base estimation if provided
+    let shared_base = if let Some(base_path) = base_from {
+        println!("Loading base estimation from {}...", base_path.display());
+        let json = std::fs::read_to_string(&base_path)
+            .map_err(|e| format!("Failed to read base estimation file: {}", e))?;
+        let base: invers_core::models::BaseEstimation = serde_json::from_str(&json)
+            .map_err(|e| format!("Failed to parse base estimation: {}", e))?;
+        println!(
+            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+            base.medians[0], base.medians[1], base.medians[2]
+        );
+        Some(base)
     } else {
         None
     };
 
-    // Load film preset if provided
-    let film_preset = if let Some(preset_path) = preset {
+    // Load shared film preset if provided
+    let film_preset = if let Some(preset_path) = &preset {
         println!("Loading film preset from {}...", preset_path.display());
-        Some(invers_core::presets::load_film_preset(&preset_path)?)
+        Some(invers_core::presets::load_film_preset(preset_path)?)
     } else {
         None
     };
 
+    println!(
+        "\nProcessing {} files in parallel...\n",
+        inputs.len()
+    );
+
+    // Progress tracking
+    let processed_count = AtomicUsize::new(0);
     let total_files = inputs.len();
-    println!("Processing {} file(s)...\n", total_files);
 
-    let mut processed_count = 0;
-    let mut failed_count = 0;
+    // Process files in parallel
+    let results: Vec<Result<PathBuf, String>> = inputs
+        .par_iter()
+        .map(|input| {
+            // Decode image
+            let decoded = invers_core::decoders::decode_image(input)?;
 
-    for (idx, input_path) in inputs.iter().enumerate() {
-        println!("[{}/{}] Processing: {}", idx + 1, total_files, input_path.display());
+            // Estimate or use shared base
+            let base_estimation = if let Some(ref base) = shared_base {
+                base.clone()
+            } else {
+                invers_core::pipeline::estimate_base(&decoded, None)?
+            };
 
-        // Skip if input doesn't exist
-        if !input_path.exists() {
-            eprintln!("  ✗ File not found, skipping");
-            failed_count += 1;
-            continue;
-        }
+            // Build output path using shared utility
+            let output_path = determine_output_path(input, &out, &export)?;
 
-        // Decode image
-        match invers_core::decoders::decode_image(input_path) {
-            Ok(decoded) => {
-                // Estimate base if not provided
-                let base = if let Some(ref be) = base_estimation {
-                    be.clone()
-                } else {
-                    match invers_core::pipeline::estimate_base(&decoded, None) {
-                        Ok(est) => est,
-                        Err(e) => {
-                            eprintln!("  ✗ Base estimation failed: {}", e);
-                            failed_count += 1;
-                            continue;
-                        }
-                    }
-                };
+            let output_dir_for_options = output_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
 
-                // Determine output path
-                let output_path = match determine_output_path(input_path, &out, &export) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("  ✗ Invalid output path: {}", e);
-                        failed_count += 1;
-                        continue;
-                    }
-                };
+            // Build conversion options using shared utility
+            let options = build_convert_options(
+                input.clone(),
+                output_dir_for_options,
+                &export,
+                "linear-rec2020".to_string(),
+                Some(base_estimation),
+                film_preset.clone(),
+                false,
+                false,
+                1.0,
+                false,
+            )?;
 
-                let output_dir = output_path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .to_path_buf();
+            // Process image
+            let processed = invers_core::pipeline::process_image(decoded, &options)?;
 
-                // Build conversion options
-                match build_convert_options(
-                    input_path.clone(),
-                    output_dir,
-                    &export,
-                    "linear-rec2020".to_string(),
-                    Some(base),
-                    film_preset.clone(),
-                    false,
-                    false,
-                    1.0,
-                    false,
-                ) {
-                    Ok(options) => {
-                        // Process image
-                        match invers_core::pipeline::process_image(decoded, &options) {
-                            Ok(processed) => {
-                                // Export
-                                match invers_core::exporters::export_tiff16(&processed, &output_path, None) {
-                                    Ok(_) => {
-                                        println!("  ✓ Exported to: {}", output_path.display());
-                                        processed_count += 1;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("  ✗ Export failed: {}", e);
-                                        failed_count += 1;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("  ✗ Processing failed: {}", e);
-                                failed_count += 1;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("  ✗ Configuration failed: {}", e);
-                        failed_count += 1;
-                    }
+            // Export
+            match options.output_format {
+                invers_core::models::OutputFormat::Tiff16 => {
+                    invers_core::exporters::export_tiff16(&processed, &output_path, None)?;
+                }
+                invers_core::models::OutputFormat::LinearDng => {
+                    return Err("Linear DNG export not yet implemented".to_string());
                 }
             }
+
+            // Update progress
+            let count = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
+            println!(
+                "[{}/{}] Processed: {} -> {}",
+                count,
+                total_files,
+                input.display(),
+                output_path.display()
+            );
+
+            Ok(output_path)
+        })
+        .collect();
+
+    // Summarize results
+    let mut success_count = 0;
+    let mut errors: Vec<(PathBuf, String)> = Vec::new();
+
+    for (input, result) in inputs.iter().zip(results.iter()) {
+        match result {
+            Ok(_) => success_count += 1,
             Err(e) => {
-                eprintln!("  ✗ Failed to decode image: {}", e);
-                failed_count += 1;
+                errors.push((input.clone(), e.clone()));
             }
         }
     }
@@ -645,13 +654,22 @@ fn cmd_batch(
     println!("\n========================================");
     println!("BATCH PROCESSING COMPLETE");
     println!("========================================");
-    println!("Processed: {} / {}", processed_count, total_files);
-    if failed_count > 0 {
-        println!("Failed: {}", failed_count);
-    }
-    println!();
+    println!("  Successful: {}", success_count);
+    println!("  Failed:     {}", errors.len());
+    println!("  Output dir: {}", output_dir.display());
 
-    Ok(())
+    if !errors.is_empty() {
+        println!("\nErrors:");
+        for (path, error) in &errors {
+            println!("  {}: {}", path.display(), error);
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} files failed to process", errors.len()))
+    }
 }
 
 fn cmd_preset_list(_dir: Option<PathBuf>) -> Result<(), String> {
@@ -722,6 +740,10 @@ fn cmd_preset_create(output: PathBuf, name: String) -> Result<(), String> {
         tone_curve: invers_core::models::ToneCurveParams {
             curve_type: "neutral".to_string(),
             strength: 0.5,
+            toe_strength: 0.4,
+            shoulder_strength: 0.3,
+            toe_length: 0.25,
+            shoulder_start: 0.75,
             params: std::collections::HashMap::new(),
         },
         notes: Some(format!("Film preset: {}", name)),

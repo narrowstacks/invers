@@ -318,6 +318,10 @@ impl InversApp {
             tone_curve: ToneCurveParams {
                 curve_type: "neutral".to_string(),
                 strength: self.tone_curve_strength,
+                toe_strength: 0.4,
+                shoulder_strength: 0.3,
+                toe_length: 0.25,
+                shoulder_start: 0.75,
                 params: std::collections::HashMap::new(),
             },
             notes: None,

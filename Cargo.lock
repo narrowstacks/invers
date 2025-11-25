@@ -1912,6 +1912,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "invers-core",
+ "rayon",
  "serde_json",
  "serde_yaml",
 ]
