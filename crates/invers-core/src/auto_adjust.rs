@@ -6,20 +6,15 @@
 use std::cmp::Ordering;
 
 /// Auto-levels mode for controlling color preservation
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum AutoLevelsMode {
     /// Independent per-channel stretching (default, may shift colors)
+    #[default]
     PerChannel,
     /// Saturation-aware: reduces stretch for channels that would clip heavily
     SaturationAware,
     /// Preserve saturation: use minimum stretch across all channels
     PreserveSaturation,
-}
-
-impl Default for AutoLevelsMode {
-    fn default() -> Self {
-        Self::PerChannel
-    }
 }
 
 /// Auto-levels: Stretch histogram to full 0.0-1.0 range per channel

@@ -302,9 +302,10 @@ fn default_auto_exposure_max_gain() -> f32 {
 }
 
 /// Output format options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OutputFormat {
     /// 16-bit linear TIFF
+    #[default]
     Tiff16,
 
     /// Linear DNG
@@ -312,9 +313,10 @@ pub enum OutputFormat {
 }
 
 /// Bit depth handling policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BitDepthPolicy {
     /// Match input bit depth when possible
+    #[default]
     MatchInput,
 
     /// Always use 16-bit output
@@ -325,9 +327,10 @@ pub enum BitDepthPolicy {
 }
 
 /// Base estimation sampling mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BaseSamplingMode {
     /// Use median of brightest pixels (default, robust)
+    #[default]
     Median,
 
     /// Use mean of brightest pixels (more sensitive to maximum)
@@ -338,9 +341,10 @@ pub enum BaseSamplingMode {
 }
 
 /// Inversion mode for negative-to-positive conversion
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum InversionMode {
     /// Linear inversion: (base - negative) / base
+    #[default]
     Linear,
 
     /// Logarithmic inversion: 10^(log10(base) - log10(negative))
@@ -348,12 +352,13 @@ pub enum InversionMode {
 }
 
 /// Shadow lift mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShadowLiftMode {
     /// Fixed lift value
     Fixed,
 
     /// Percentile-based adaptive lift (e.g., lift 1st percentile to target)
+    #[default]
     Percentile,
 
     /// No shadow lift
@@ -371,35 +376,5 @@ impl Default for ToneCurveParams {
             shoulder_start: default_shoulder_start(),
             params: std::collections::HashMap::new(),
         }
-    }
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Tiff16
-    }
-}
-
-impl Default for BitDepthPolicy {
-    fn default() -> Self {
-        Self::MatchInput
-    }
-}
-
-impl Default for BaseSamplingMode {
-    fn default() -> Self {
-        Self::Median
-    }
-}
-
-impl Default for InversionMode {
-    fn default() -> Self {
-        Self::Linear
-    }
-}
-
-impl Default for ShadowLiftMode {
-    fn default() -> Self {
-        Self::Percentile
     }
 }

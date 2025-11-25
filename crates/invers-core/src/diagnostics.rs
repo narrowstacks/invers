@@ -8,6 +8,9 @@ use crate::exporters::export_tiff16;
 use crate::pipeline::ProcessedImage;
 use std::path::Path;
 
+/// RGB sample patches (shadow, midtone, highlight) as flat f32 arrays
+pub type RgbSamplePatches = (Vec<f32>, Vec<f32>, Vec<f32>);
+
 /// Statistics for a single channel
 #[derive(Debug, Clone)]
 pub struct ChannelStats {
@@ -203,7 +206,7 @@ pub fn extract_sample_patches(
     width: u32,
     height: u32,
     patch_size: u32,
-) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>), String> {
+) -> Result<RgbSamplePatches, String> {
     // Find representative regions
     let shadow_center = find_representative_pixel(data, width, height, 0.1, 0.3)?;
     let midtone_center = find_representative_pixel(data, width, height, 0.4, 0.6)?;

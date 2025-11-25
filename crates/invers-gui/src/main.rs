@@ -556,10 +556,10 @@ impl InversApp {
 
         for dy in 0..region_size {
             for dx in 0..region_size {
-                let sample_x = (x as i32 + dx as i32 - half_size as i32)
-                    .clamp(0, orig_image.width as i32 - 1) as u32;
-                let sample_y = (y as i32 + dy as i32 - half_size as i32)
-                    .clamp(0, orig_image.height as i32 - 1) as u32;
+                let sample_x =
+                    (x as i32 + dx - half_size).clamp(0, orig_image.width as i32 - 1) as u32;
+                let sample_y =
+                    (y as i32 + dy - half_size).clamp(0, orig_image.height as i32 - 1) as u32;
 
                 let idx = ((sample_y * orig_image.width + sample_x) * 3) as usize;
                 if idx + 2 < orig_image.data.len() {
@@ -627,10 +627,10 @@ impl InversApp {
 
         for dy in 0..region_size {
             for dx in 0..region_size {
-                let sample_x = (x as i32 + dx as i32 - half_size as i32)
-                    .clamp(0, orig_image.width as i32 - 1) as u32;
-                let sample_y = (y as i32 + dy as i32 - half_size as i32)
-                    .clamp(0, orig_image.height as i32 - 1) as u32;
+                let sample_x =
+                    (x as i32 + dx - half_size).clamp(0, orig_image.width as i32 - 1) as u32;
+                let sample_y =
+                    (y as i32 + dy - half_size).clamp(0, orig_image.height as i32 - 1) as u32;
 
                 let idx = ((sample_y * orig_image.width + sample_x) * 3) as usize;
                 if idx + 2 < orig_image.data.len() {
@@ -944,7 +944,7 @@ impl InversApp {
                     match self.process_original_for_export() {
                         Ok(processed) => {
                             let output_path = determine_output_path(
-                                &loaded_path,
+                                loaded_path,
                                 &Some(PathBuf::from(".")),
                                 match self.output_format {
                                     OutputFormat::Tiff16 => "tiff16",

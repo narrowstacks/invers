@@ -652,7 +652,7 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
 
                     // Progress reporting
                     let count = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if count % 10 == 0 || count == total_combinations {
+                    if count.is_multiple_of(10) || count == total_combinations {
                         eprintln!(
                             "[PARALLEL GRID SEARCH] Progress: {}/{}",
                             count, total_combinations

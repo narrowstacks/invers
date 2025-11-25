@@ -3,7 +3,7 @@
 //! This module provides reusable functions and utilities that can be
 //! shared between the CLI and GUI applications.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Parse ROI string in format "x,y,width,height"
 ///
@@ -51,7 +51,7 @@ pub fn parse_roi(roi_str: &str) -> Result<(u32, u32, u32, u32), String> {
 /// # Returns
 /// The full output path for the converted image
 pub fn determine_output_path(
-    input: &PathBuf,
+    input: &Path,
     out: &Option<PathBuf>,
     export: &str,
 ) -> Result<PathBuf, String> {

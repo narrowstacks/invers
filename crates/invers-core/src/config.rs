@@ -25,7 +25,7 @@ impl PipelineConfigHandle {
 }
 
 /// Complete configuration file structure.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct PipelineConfig {
     pub defaults: PipelineDefaults,
@@ -48,15 +48,6 @@ impl PipelineConfig {
             grid.sanitize_with(TestingGridValues::comprehensive_grid());
         }
         self
-    }
-}
-
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            defaults: PipelineDefaults::default(),
-            testing: TestingConfig::default(),
-        }
     }
 }
 
@@ -132,24 +123,13 @@ impl Default for PipelineDefaults {
 }
 
 /// Testing-related configuration overrides.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct TestingConfig {
     pub parameter_test_defaults: Option<ParameterTestDefaults>,
     pub default_grid: Option<TestingGridValues>,
     pub minimal_grid: Option<TestingGridValues>,
     pub comprehensive_grid: Option<TestingGridValues>,
-}
-
-impl Default for TestingConfig {
-    fn default() -> Self {
-        Self {
-            parameter_test_defaults: None,
-            default_grid: None,
-            minimal_grid: None,
-            comprehensive_grid: None,
-        }
-    }
 }
 
 /// Defaults for a single parameter test run.

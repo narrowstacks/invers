@@ -82,7 +82,7 @@ pub fn export_linear_dng<P: AsRef<Path>>(
 }
 
 /// Metadata for DNG export
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DngMetadata {
     /// Camera make
     pub make: Option<String>,
@@ -101,17 +101,4 @@ pub struct DngMetadata {
 
     /// Color matrix
     pub color_matrix: Option<[[f32; 3]; 3]>,
-}
-
-impl Default for DngMetadata {
-    fn default() -> Self {
-        Self {
-            make: None,
-            model: None,
-            black_level: None,
-            white_level: None,
-            as_shot_neutral: None,
-            color_matrix: None,
-        }
-    }
 }
