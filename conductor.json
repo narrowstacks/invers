@@ -1,6 +1,0 @@
-{
-    "scripts": {
-        "setup": "./conductor-setup.sh",
-        "run": "cargo build --release && ./target/release/invers-cli --help"
-    }
-}

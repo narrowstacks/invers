@@ -1,0 +1,68 @@
+# DSLR/Mirrorless Camera Scanning Profile
+# Based on Grain2Pixel's DSLR HSL presets
+#
+# Use this profile when scanning film negatives with a DSLR or mirrorless camera
+# and a copy stand or light table setup.
+
+name: "DSLR Generic"
+source_type: "dslr"
+
+# White/black levels typical for DSLR camera scans
+white_level: 1.0
+black_level: 0.0
+
+# Demosaic hints for RAW processing
+demosaic_hints:
+  algorithm: "amaze"
+  quality: 1.0
+
+# White balance hints
+white_balance_hints:
+  auto: false
+  temperature: 5500.0
+  tint: 0.0
+
+# HSL adjustments tuned for DSLR scans
+# These compensate for typical DSLR color response when scanning film
+hsl_adjustments:
+  # Hue shifts: [R, O, Y, G, A, B, P, M]
+  hue:
+    - 0.0    # Reds - no shift
+    - 5.0    # Oranges - slight warm shift
+    - 0.0    # Yellows
+    - -5.0   # Greens - slight cooler shift
+    - 0.0    # Aquas
+    - 0.0    # Blues
+    - 0.0    # Purples
+    - 0.0    # Magentas
+
+  # Saturation adjustments: [R, O, Y, G, A, B, P, M]
+  saturation:
+    - 10.0   # Reds - boost slightly
+    - 5.0    # Oranges
+    - 0.0    # Yellows
+    - 5.0    # Greens - boost slightly
+    - 0.0    # Aquas
+    - 5.0    # Blues - boost slightly
+    - 0.0    # Purples
+    - 0.0    # Magentas
+
+  # Luminance adjustments: [R, O, Y, G, A, B, P, M]
+  luminance:
+    - 0.0    # Reds
+    - 0.0    # Oranges
+    - 0.0    # Yellows
+    - 0.0    # Greens
+    - 0.0    # Aquas
+    - 0.0    # Blues
+    - 0.0    # Purples
+    - 0.0    # Magentas
+
+# Default gamma values [R, G, B] - slight green channel correction
+default_gamma:
+  - 1.0
+  - 0.98
+  - 1.0
+
+# Preferred inversion mode
+preferred_inversion_mode: Linear

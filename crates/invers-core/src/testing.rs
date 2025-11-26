@@ -177,6 +177,7 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         debug: false,
         enable_auto_levels: params.enable_auto_levels,
         auto_levels_clip_percent: params.clip_percent,
+        preserve_headroom: false,
         enable_auto_color: params.enable_auto_color,
         auto_color_strength: params.auto_color_strength,
         auto_color_min_gain: params.auto_color_min_gain,

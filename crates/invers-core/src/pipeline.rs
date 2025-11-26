@@ -91,6 +91,18 @@ pub fn process_image(
                 stats.0, stats.1, stats.2
             );
         }
+
+        // Apply headroom preservation if requested (G2P-style output range)
+        if options.preserve_headroom {
+            apply_headroom(&mut data);
+            if options.debug {
+                let stats = compute_stats(&data);
+                eprintln!(
+                    "[DEBUG] After headroom preservation - min: {:.6}, max: {:.6}, mean: {:.6}",
+                    stats.0, stats.1, stats.2
+                );
+            }
+        }
     } else if options.debug {
         eprintln!("[DEBUG] Auto-levels skipped");
     }
@@ -216,7 +228,44 @@ pub fn process_image(
         eprintln!("[DEBUG] Tone curve skipped");
     }
 
-    // Step 6: Colorspace transform (for now, keep in same space)
+    // Step 6: Apply scan profile adjustments (only if a scan profile is specified)
+    if let Some(ref scan_profile) = options.scan_profile {
+        // Apply per-channel gamma if specified
+        if let Some(gamma) = scan_profile.default_gamma {
+            if gamma != [1.0, 1.0, 1.0] {
+                for pixel in data.chunks_exact_mut(3) {
+                    pixel[0] = pixel[0].powf(1.0 / gamma[0]);
+                    pixel[1] = pixel[1].powf(1.0 / gamma[1]);
+                    pixel[2] = pixel[2].powf(1.0 / gamma[2]);
+                }
+
+                if options.debug {
+                    let stats = compute_stats(&data);
+                    eprintln!(
+                        "[DEBUG] After scan profile gamma [{:.2}, {:.2}, {:.2}] - min: {:.6}, max: {:.6}, mean: {:.6}",
+                        gamma[0], gamma[1], gamma[2], stats.0, stats.1, stats.2
+                    );
+                }
+            }
+        }
+
+        // Apply HSL adjustments if specified
+        if let Some(ref hsl_adj) = scan_profile.hsl_adjustments {
+            if hsl_adj.has_adjustments() {
+                crate::color::apply_hsl_adjustments(&mut data, hsl_adj);
+
+                if options.debug {
+                    let stats = compute_stats(&data);
+                    eprintln!(
+                        "[DEBUG] After scan profile HSL adjustments - min: {:.6}, max: {:.6}, mean: {:.6}",
+                        stats.0, stats.1, stats.2
+                    );
+                }
+            }
+        }
+    }
+
+    // Step 7: Colorspace transform (for now, keep in same space)
     // TODO: Implement colorspace transforms in M3
 
     // Final guard: keep values within photographic working range
@@ -310,6 +359,76 @@ fn estimate_base_from_manual_roi(
     })
 }
 
+/// Filter out clipped/extreme pixels that are not valid film base
+///
+/// Film base should be bright but NOT clipped white. This filters:
+/// - Near-white clipped pixels (all channels > 0.95)
+/// - Very dark pixels (all channels < 0.05)
+/// - Bright grayscale pixels without color variation (not orange mask)
+/// Filter results from base pixel filtering
+struct FilteredBasePixels {
+    /// Valid pixels that passed filtering
+    pixels: Vec<[f32; 3]>,
+    /// Ratio of pixels that were clipped (0.0-1.0)
+    clipped_ratio: f32,
+    /// Ratio of pixels that were too dark (0.0-1.0)
+    dark_ratio: f32,
+}
+
+fn filter_valid_base_pixels(pixels: Vec<[f32; 3]>) -> FilteredBasePixels {
+    let total = pixels.len() as f32;
+    let mut clipped_count = 0usize;
+    let mut dark_count = 0usize;
+
+    let valid_pixels: Vec<[f32; 3]> = pixels
+        .into_iter()
+        .filter(|p| {
+            let [r, g, b] = *p;
+            let max_val = r.max(g).max(b);
+            let min_val = r.min(g).min(b);
+
+            // Exclude near-white clipped pixels (any channel > 0.98 or all > 0.90)
+            // More aggressive threshold to catch partially clipped pixels
+            if max_val > 0.98 || min_val > 0.90 {
+                clipped_count += 1;
+                return false;
+            }
+
+            // Exclude very dark pixels (all channels < 0.05)
+            if max_val < 0.05 {
+                dark_count += 1;
+                return false;
+            }
+
+            // For bright pixels (max > 0.7), require some color variation
+            // (orange mask has R > G > B, not all equal)
+            if max_val > 0.7 {
+                let range = max_val - min_val;
+                // Require at least 5% variation between channels for bright pixels
+                if range < 0.05 {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect();
+
+    FilteredBasePixels {
+        pixels: valid_pixels,
+        clipped_ratio: if total > 0.0 {
+            clipped_count as f32 / total
+        } else {
+            0.0
+        },
+        dark_ratio: if total > 0.0 {
+            dark_count as f32 / total
+        } else {
+            0.0
+        },
+    }
+}
+
 /// Estimate film base using discrete border regions (top, bottom, left, right)
 fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, String> {
     let sample_fraction = base_sample_fraction();
@@ -349,8 +468,29 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
             continue;
         }
 
+        // Filter out clipped/extreme pixels
+        let filtered = filter_valid_base_pixels(roi_pixels);
+
+        // Reject regions with too many clipped pixels (>50% clipped = saturated border)
+        if filtered.clipped_ratio > 0.50 {
+            eprintln!(
+                "[BASE] Skipping {} candidate: {:.0}% pixels clipped (saturated border)",
+                candidate.label,
+                filtered.clipped_ratio * 100.0
+            );
+            continue;
+        }
+
+        if filtered.pixels.is_empty() {
+            eprintln!(
+                "[BASE] Skipping {} candidate: no valid pixels after filtering",
+                candidate.label
+            );
+            continue;
+        }
+
         let (num_brightest, percentage, medians, noise_stats) =
-            compute_base_stats(&roi_pixels, sample_fraction);
+            compute_base_stats(&filtered.pixels, sample_fraction);
 
         eprintln!(
             "[BASE] Candidate {:>6} | brightness={:.4} | using {} px ({:.1}%)",
@@ -360,6 +500,12 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
             "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
             medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
         );
+        if filtered.clipped_ratio > 0.1 {
+            eprintln!(
+                "[BASE]   note: {:.0}% pixels were clipped",
+                filtered.clipped_ratio * 100.0
+            );
+        }
 
         let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
 
@@ -384,15 +530,33 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         }
     }
 
+    // Try histogram-based whole-image estimation as last resort
+    eprintln!("[BASE] All region candidates rejected; trying histogram-based estimation...");
+    match estimate_base_from_histogram(image) {
+        Ok(histogram_estimation) => {
+            eprintln!(
+                "[BASE] Using histogram-based base: [{:.4}, {:.4}, {:.4}]",
+                histogram_estimation.medians[0],
+                histogram_estimation.medians[1],
+                histogram_estimation.medians[2]
+            );
+            return Ok(histogram_estimation);
+        }
+        Err(e) => {
+            eprintln!("[BASE] Histogram estimation failed: {}", e);
+        }
+    }
+
+    // Fall back to best rejected candidate
     if let Some(estimation) = fallback {
         if let Some(rect) = estimation.roi {
             if let Some(candidate) = candidates.iter().find(|c| c.rect == rect) {
                 eprintln!(
-                    "[BASE] All auto candidates rejected; falling back to {} (brightness {:.4})",
+                    "[BASE] Final fallback to {} (brightness {:.4})",
                     candidate.label, candidate.brightness
                 );
             } else {
-                eprintln!("[BASE] All auto candidates rejected; using brightest ROI");
+                eprintln!("[BASE] Final fallback to brightest ROI");
             }
         }
         Ok(estimation)
@@ -616,8 +780,9 @@ fn extract_border_pixels(image: &DecodedImage, border_percent: f32) -> Vec<[f32;
 ///
 /// This method:
 /// 1. Extracts all pixels from the outer border_percent of the image
-/// 2. Finds the brightest N% of those pixels
-/// 3. Computes per-channel medians from those brightest pixels
+/// 2. Filters out clipped/near-white pixels (which are not valid film base)
+/// 3. Finds the brightest N% of remaining pixels
+/// 4. Computes per-channel medians from those brightest pixels
 ///
 /// This is useful for full-frame scans that include the film rebate area,
 /// where the unexposed film base is visible around the edges.
@@ -640,8 +805,29 @@ fn estimate_base_from_border(
 
     eprintln!("[BASE] Extracted {} border pixels", border_pixels.len());
 
+    // Filter out clipped/extreme pixels
+    let filtered = filter_valid_base_pixels(border_pixels);
+    let filtered_count = filtered.pixels.len();
+    eprintln!(
+        "[BASE] After filtering clipped/extreme pixels: {} remaining ({:.0}% clipped, {:.0}% dark)",
+        filtered_count,
+        filtered.clipped_ratio * 100.0,
+        filtered.dark_ratio * 100.0
+    );
+
+    // Warn if too many pixels are clipped
+    if filtered.clipped_ratio > 0.50 {
+        eprintln!(
+            "[BASE] WARNING: >50% of border pixels are clipped - film base may be overexposed"
+        );
+    }
+
+    if filtered.pixels.is_empty() {
+        return Err("No valid film base pixels found in border (all clipped or extreme)".to_string());
+    }
+
     let (num_brightest, percentage, medians, noise_stats) =
-        compute_base_stats(&border_pixels, sample_fraction);
+        compute_base_stats(&filtered.pixels, sample_fraction);
 
     eprintln!(
         "[BASE] Border | using {} px ({:.1}%) brightest",
@@ -653,11 +839,12 @@ fn estimate_base_from_border(
     );
 
     // Calculate average brightness for validation
-    let brightness: f32 = border_pixels
+    let brightness: f32 = filtered
+        .pixels
         .iter()
         .map(|p| 0.5 * p[0] + 0.4 * p[1] + 0.1 * p[2])
         .sum::<f32>()
-        / border_pixels.len() as f32;
+        / filtered.pixels.len() as f32;
 
     let (valid, reason) = validate_base_candidate(&medians, &noise_stats, brightness);
 
@@ -671,6 +858,97 @@ fn estimate_base_from_border(
         roi: None, // Border method doesn't use a specific ROI
         medians,
         noise_stats: Some(noise_stats),
+        auto_estimated: true,
+    })
+}
+
+/// Estimate film base from whole-image histogram analysis
+///
+/// This method finds the mode (peak) of each channel's histogram in the upper
+/// brightness range, avoiding clipped highlights. This works when border regions
+/// don't contain clean film base.
+fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, String> {
+    const NUM_BINS: usize = 256;
+    const MIN_BRIGHT: f32 = 0.30; // Only consider upper 70% of range
+    const MAX_BRIGHT: f32 = 0.90; // Avoid clipped highlights
+
+    let mut r_hist = [0u32; NUM_BINS];
+    let mut g_hist = [0u32; NUM_BINS];
+    let mut b_hist = [0u32; NUM_BINS];
+
+    let pixels = image.data.chunks_exact(3);
+    let mut total_valid = 0u64;
+
+    for chunk in pixels {
+        let r = chunk[0];
+        let g = chunk[1];
+        let b = chunk[2];
+
+        // Only consider pixels in the target brightness range
+        let max_ch = r.max(g).max(b);
+        let min_ch = r.min(g).min(b);
+
+        if max_ch >= MIN_BRIGHT && min_ch <= MAX_BRIGHT {
+            // Bin each channel
+            let r_bin = ((r * (NUM_BINS - 1) as f32) as usize).min(NUM_BINS - 1);
+            let g_bin = ((g * (NUM_BINS - 1) as f32) as usize).min(NUM_BINS - 1);
+            let b_bin = ((b * (NUM_BINS - 1) as f32) as usize).min(NUM_BINS - 1);
+
+            r_hist[r_bin] += 1;
+            g_hist[g_bin] += 1;
+            b_hist[b_bin] += 1;
+            total_valid += 1;
+        }
+    }
+
+    if total_valid < 1000 {
+        return Err("Insufficient valid pixels for histogram analysis".to_string());
+    }
+
+    // Find the highest peak in each channel's histogram (mode)
+    // Focus on the upper portion of the histogram where film base would be
+    let min_bin = (MIN_BRIGHT * (NUM_BINS - 1) as f32) as usize;
+    let max_bin = (MAX_BRIGHT * (NUM_BINS - 1) as f32) as usize;
+
+    let find_peak_in_range = |hist: &[u32; NUM_BINS]| -> f32 {
+        let mut peak_bin = min_bin;
+        let mut peak_count = 0u32;
+
+        for bin in min_bin..=max_bin {
+            if hist[bin] > peak_count {
+                peak_count = hist[bin];
+                peak_bin = bin;
+            }
+        }
+
+        // Convert bin back to value
+        peak_bin as f32 / (NUM_BINS - 1) as f32
+    };
+
+    let r_peak = find_peak_in_range(&r_hist);
+    let g_peak = find_peak_in_range(&g_hist);
+    let b_peak = find_peak_in_range(&b_hist);
+
+    // For color negative, we expect R > G > B in the base
+    // If this pattern isn't present, reduce confidence
+    let is_color_neg_pattern = r_peak >= g_peak * 0.9 && g_peak >= b_peak * 0.9;
+
+    eprintln!(
+        "[BASE] Histogram peaks: R={:.4}, G={:.4}, B={:.4} ({})",
+        r_peak,
+        g_peak,
+        b_peak,
+        if is_color_neg_pattern {
+            "color negative pattern"
+        } else {
+            "atypical pattern"
+        }
+    );
+
+    Ok(BaseEstimation {
+        roi: None,
+        medians: [r_peak, g_peak, b_peak],
+        noise_stats: None, // Histogram method doesn't compute noise
         auto_estimated: true,
     })
 }
@@ -950,6 +1228,36 @@ pub fn invert_negative(
                 pixel[0] = 10f32.powf(log_base_r - neg_r.log10()).clamp(0.0, 10.0);
                 pixel[1] = 10f32.powf(log_base_g - neg_g.log10()).clamp(0.0, 10.0);
                 pixel[2] = 10f32.powf(log_base_b - neg_b.log10()).clamp(0.0, 10.0);
+            }
+        }
+        crate::models::InversionMode::DivideBlend => {
+            // Grain2Pixel-style divide blend inversion:
+            // 1. Divide: pixel / base (per channel)
+            // 2. Apply gamma 2.2 (like Photoshop's Exposure layer)
+            // 3. Invert: 1.0 - result
+            //
+            // This mimics the Photoshop workflow:
+            // - Create layer filled with base color
+            // - Set blend mode to "Divide"
+            // - Add Exposure adjustment layer at 2.2 gamma
+            // - Add inversion via Linear Light
+            const GAMMA: f32 = 1.0 / 2.2;
+
+            for pixel in data.chunks_exact_mut(3) {
+                // Step 1: Divide
+                let divided_r = (pixel[0] / base_r).clamp(0.0, 10.0);
+                let divided_g = (pixel[1] / base_g).clamp(0.0, 10.0);
+                let divided_b = (pixel[2] / base_b).clamp(0.0, 10.0);
+
+                // Step 2: Apply gamma 2.2 (linear to gamma-encoded)
+                let gamma_r = divided_r.powf(GAMMA);
+                let gamma_g = divided_g.powf(GAMMA);
+                let gamma_b = divided_b.powf(GAMMA);
+
+                // Step 3: Invert
+                pixel[0] = 1.0 - gamma_r;
+                pixel[1] = 1.0 - gamma_g;
+                pixel[2] = 1.0 - gamma_b;
             }
         }
     }
@@ -1270,4 +1578,23 @@ fn compute_stats(data: &[f32]) -> (f32, f32, f32) {
 
     let mean = sum / data.len() as f32;
     (min, max, mean)
+}
+
+/// Apply G2P-style headroom preservation
+///
+/// Remaps output from 0-1 range to approximately 0.005-0.98 range
+/// to preserve shadow and highlight detail like Grain2Pixel does.
+///
+/// G2P characteristics:
+/// - Minimum luminance: ~0.005 (lifted shadows)
+/// - Maximum luminance: ~0.98 (preserved highlights)
+fn apply_headroom(data: &mut [f32]) {
+    const OUTPUT_BLACK: f32 = 0.005;
+    const OUTPUT_WHITE: f32 = 0.98;
+    const OUTPUT_RANGE: f32 = OUTPUT_WHITE - OUTPUT_BLACK;
+
+    for value in data.iter_mut() {
+        // Remap from 0-1 to OUTPUT_BLACK-OUTPUT_WHITE
+        *value = OUTPUT_BLACK + (*value * OUTPUT_RANGE);
+    }
 }

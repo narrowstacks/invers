@@ -94,6 +94,20 @@ pub struct ScanProfile {
 
     /// White balance hints
     pub white_balance_hints: Option<WhiteBalanceHints>,
+
+    /// HSL adjustments specific to this scanner/source
+    /// Used to compensate for scanner color characteristics
+    #[serde(default)]
+    pub hsl_adjustments: Option<HslAdjustments>,
+
+    /// Default per-channel gamma values [R, G, B]
+    /// Applied during levels adjustment
+    #[serde(default)]
+    pub default_gamma: Option<[f32; 3]>,
+
+    /// Preferred inversion mode for this scanner type
+    #[serde(default)]
+    pub preferred_inversion_mode: Option<InversionMode>,
 }
 
 /// Demosaic processing hints
@@ -117,6 +131,64 @@ pub struct WhiteBalanceHints {
 
     /// Tint adjustment
     pub tint: Option<f32>,
+}
+
+/// 8-color HSL adjustments (Grain2Pixel/Camera Raw style)
+///
+/// Adjusts Hue, Saturation, and Luminance for 8 color ranges:
+/// - R (Reds): Hue ~0-30, 330-360
+/// - O (Oranges): Hue ~30-60
+/// - Y (Yellows): Hue ~60-90
+/// - G (Greens): Hue ~90-150
+/// - A (Aquas/Cyans): Hue ~150-210
+/// - B (Blues): Hue ~210-270
+/// - P (Purples): Hue ~270-300
+/// - M (Magentas): Hue ~300-330
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HslAdjustments {
+    /// Hue shifts for each of the 8 color ranges (-100 to +100)
+    /// Order: [R, O, Y, G, A, B, P, M]
+    #[serde(default)]
+    pub hue: [f32; 8],
+
+    /// Saturation adjustments for each of the 8 color ranges (-100 to +100)
+    /// Order: [R, O, Y, G, A, B, P, M]
+    #[serde(default)]
+    pub saturation: [f32; 8],
+
+    /// Luminance adjustments for each of the 8 color ranges (-100 to +100)
+    /// Order: [R, O, Y, G, A, B, P, M]
+    #[serde(default)]
+    pub luminance: [f32; 8],
+}
+
+impl Default for HslAdjustments {
+    fn default() -> Self {
+        Self {
+            hue: [0.0; 8],
+            saturation: [0.0; 8],
+            luminance: [0.0; 8],
+        }
+    }
+}
+
+impl HslAdjustments {
+    /// Check if any adjustments are non-zero
+    pub fn has_adjustments(&self) -> bool {
+        self.hue.iter().any(|&v| v.abs() > 0.001)
+            || self.saturation.iter().any(|&v| v.abs() > 0.001)
+            || self.luminance.iter().any(|&v| v.abs() > 0.001)
+    }
+
+    /// Color range indices
+    pub const REDS: usize = 0;
+    pub const ORANGES: usize = 1;
+    pub const YELLOWS: usize = 2;
+    pub const GREENS: usize = 3;
+    pub const AQUAS: usize = 4;
+    pub const BLUES: usize = 5;
+    pub const PURPLES: usize = 6;
+    pub const MAGENTAS: usize = 7;
 }
 
 /// Film base estimation from ROI
@@ -185,6 +257,11 @@ pub struct ConvertOptions {
     /// Clipping percentage for auto-levels (0.0-10.0)
     #[serde(default = "default_clip_percent")]
     pub auto_levels_clip_percent: f32,
+
+    /// Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
+    /// When true, output range is approximately 0.005-0.98 like Grain2Pixel
+    #[serde(default = "default_false")]
+    pub preserve_headroom: bool,
 
     /// Enable auto-color (neutralize color casts)
     /// Note: Usually unnecessary when auto-levels is enabled
@@ -360,6 +437,14 @@ pub enum InversionMode {
 
     /// Logarithmic inversion: 10^(log10(base) - log10(negative))
     Logarithmic,
+
+    /// Divide-blend inversion (Grain2Pixel style):
+    /// 1. Divide: pixel / base (per channel)
+    /// 2. Apply gamma 2.2 (convert from linear to gamma-encoded)
+    /// 3. Invert: 1.0 - result
+    ///
+    /// This mode mimics Photoshop's Divide blend mode workflow.
+    DivideBlend,
 }
 
 /// Shadow lift mode

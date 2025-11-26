@@ -30,3 +30,6 @@ target/
 *.xmp
 OPTIMIZATION_SUMMARY.md
 assets/Grain2Pixel.log
+Grain2Pixel.jsx
+
+docs/

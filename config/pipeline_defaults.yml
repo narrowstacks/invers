@@ -10,6 +10,10 @@ defaults:
   # Percentage of pixels to clip when computing auto levels (0.0-100.0). Higher values are more aggressive.
   auto_levels_clip_percent: 0.25
 
+  # Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
+  # When true, output range is approximately 0.005-0.98 like Grain2Pixel
+  preserve_headroom: true
+
   # Enable automatic white balance / color correction (true/false)
   enable_auto_color: true
 
@@ -59,7 +63,7 @@ defaults:
   exposure_compensation: 1.0
 
   # Skip applying film-specific tone curve during processing (true/false)
-  skip_tone_curve: false
+  skip_tone_curve: true
 
   # Skip applying color correction matrix during processing (true/false)
   skip_color_matrix: false
@@ -79,7 +83,7 @@ testing:
     shadow_lift_value: 0.02
     highlight_compression: 1.0
     tone_curve_strength: 0.5
-    skip_tone_curve: false
+    skip_tone_curve: true
     exposure_compensation: 1.0
     enable_auto_exposure: true
     auto_exposure_target_median: 0.25

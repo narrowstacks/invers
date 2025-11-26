@@ -5,6 +5,48 @@
 
 use std::path::{Path, PathBuf};
 
+/// Parse base RGB values in format "R,G,B"
+///
+/// # Arguments
+/// * `base_str` - A string in format "R,G,B" with values 0.0-1.0
+///
+/// # Returns
+/// An array of [R, G, B] as f32 values
+pub fn parse_base_rgb(base_str: &str) -> Result<[f32; 3], String> {
+    let parts: Vec<&str> = base_str.split(',').collect();
+    if parts.len() != 3 {
+        return Err(format!(
+            "Base must be in format R,G,B (e.g., 0.48,0.50,0.30), got: {}",
+            base_str
+        ));
+    }
+
+    let r = parts[0]
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| format!("Invalid red value: {}", parts[0]))?;
+    let g = parts[1]
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| format!("Invalid green value: {}", parts[1]))?;
+    let b = parts[2]
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| format!("Invalid blue value: {}", parts[2]))?;
+
+    // Validate range
+    for (val, name) in [(r, "Red"), (g, "Green"), (b, "Blue")] {
+        if val <= 0.0 || val > 1.0 {
+            return Err(format!(
+                "{} value {} must be in range (0.0, 1.0]",
+                name, val
+            ));
+        }
+    }
+
+    Ok([r, g, b])
+}
+
 /// Parse ROI string in format "x,y,width,height"
 ///
 /// # Arguments
@@ -84,6 +126,28 @@ pub fn determine_output_path(
     }
 }
 
+/// Parse inversion mode from string
+///
+/// Supported values: "linear" (default), "log"/"logarithmic", "divide-blend"/"g2p"
+pub fn parse_inversion_mode(
+    mode_str: Option<&str>,
+) -> Result<Option<invers_core::models::InversionMode>, String> {
+    match mode_str {
+        None => Ok(None), // Use default from config
+        Some(s) => match s.to_lowercase().as_str() {
+            "linear" => Ok(Some(invers_core::models::InversionMode::Linear)),
+            "log" | "logarithmic" => Ok(Some(invers_core::models::InversionMode::Logarithmic)),
+            "divide-blend" | "divide" | "g2p" | "grain2pixel" => {
+                Ok(Some(invers_core::models::InversionMode::DivideBlend))
+            }
+            _ => Err(format!(
+                "Unknown inversion mode: '{}'. Valid options: linear, log, divide-blend",
+                s
+            )),
+        },
+    }
+}
+
 /// Build a ConvertOptions struct from common parameters
 ///
 /// This function centralizes the logic for building ConvertOptions with all
@@ -100,6 +164,70 @@ pub fn build_convert_options(
     exposure: f32,
     debug: bool,
 ) -> Result<invers_core::models::ConvertOptions, String> {
+    build_convert_options_with_inversion(
+        input,
+        output_dir,
+        export,
+        colorspace,
+        base_estimation,
+        film_preset,
+        no_tonecurve,
+        no_colormatrix,
+        exposure,
+        None,
+        debug,
+    )
+}
+
+/// Build a ConvertOptions struct with explicit inversion mode override
+pub fn build_convert_options_with_inversion(
+    input: PathBuf,
+    output_dir: PathBuf,
+    export: &str,
+    colorspace: String,
+    base_estimation: Option<invers_core::models::BaseEstimation>,
+    film_preset: Option<invers_core::models::FilmPreset>,
+    no_tonecurve: bool,
+    no_colormatrix: bool,
+    exposure: f32,
+    inversion_mode: Option<invers_core::models::InversionMode>,
+    debug: bool,
+) -> Result<invers_core::models::ConvertOptions, String> {
+    build_convert_options_full(
+        input,
+        output_dir,
+        export,
+        colorspace,
+        base_estimation,
+        film_preset,
+        None, // scan_profile
+        no_tonecurve,
+        no_colormatrix,
+        exposure,
+        inversion_mode,
+        false, // no_auto_levels
+        false, // preserve_headroom
+        debug,
+    )
+}
+
+/// Build a ConvertOptions struct with all options
+pub fn build_convert_options_full(
+    input: PathBuf,
+    output_dir: PathBuf,
+    export: &str,
+    colorspace: String,
+    base_estimation: Option<invers_core::models::BaseEstimation>,
+    film_preset: Option<invers_core::models::FilmPreset>,
+    scan_profile: Option<invers_core::models::ScanProfile>,
+    no_tonecurve: bool,
+    no_colormatrix: bool,
+    exposure: f32,
+    inversion_mode: Option<invers_core::models::InversionMode>,
+    no_auto_levels: bool,
+    preserve_headroom: bool,
+    debug: bool,
+) -> Result<invers_core::models::ConvertOptions, String> {
     let config_handle = invers_core::config::pipeline_config_handle();
     let defaults = config_handle.config.defaults.clone();
 
@@ -110,6 +238,14 @@ pub fn build_convert_options(
         _ => return Err(format!("Unknown export format: {}", export)),
     };
 
+    // Use provided inversion mode, or scan profile preference, or fall back to config default
+    let inversion_mode = inversion_mode
+        .or_else(|| scan_profile.as_ref().and_then(|sp| sp.preferred_inversion_mode))
+        .unwrap_or(defaults.inversion_mode);
+
+    // Auto-levels: disabled if --no-auto-levels is set
+    let enable_auto_levels = !no_auto_levels && defaults.enable_auto_levels;
+
     Ok(invers_core::models::ConvertOptions {
         input_paths: vec![input],
         output_dir,
@@ -117,22 +253,23 @@ pub fn build_convert_options(
         working_colorspace: colorspace,
         bit_depth_policy: invers_core::models::BitDepthPolicy::Force16Bit,
         film_preset,
-        scan_profile: None,
+        scan_profile,
         base_estimation,
         num_threads: None,
         skip_tone_curve: no_tonecurve || defaults.skip_tone_curve,
         skip_color_matrix: no_colormatrix || defaults.skip_color_matrix,
         exposure_compensation: defaults.exposure_compensation * exposure,
         debug,
-        enable_auto_levels: defaults.enable_auto_levels,
+        enable_auto_levels,
         auto_levels_clip_percent: defaults.auto_levels_clip_percent,
+        preserve_headroom: preserve_headroom || defaults.preserve_headroom,
         enable_auto_color: defaults.enable_auto_color,
         auto_color_strength: defaults.auto_color_strength,
         auto_color_min_gain: defaults.auto_color_min_gain,
         auto_color_max_gain: defaults.auto_color_max_gain,
         base_brightest_percent: defaults.base_brightest_percent,
         base_sampling_mode: defaults.base_sampling_mode,
-        inversion_mode: defaults.inversion_mode,
+        inversion_mode,
         shadow_lift_mode: defaults.shadow_lift_mode,
         shadow_lift_value: defaults.shadow_lift_value,
         highlight_compression: defaults.highlight_compression,

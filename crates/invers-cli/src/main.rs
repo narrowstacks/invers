@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
-use invers_cli::{build_convert_options, determine_output_path, parse_roi};
+use invers_cli::{
+    build_convert_options, build_convert_options_full, build_convert_options_with_inversion,
+    determine_output_path, parse_base_rgb, parse_inversion_mode, parse_roi,
+};
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -67,6 +70,24 @@ enum Commands {
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
         #[arg(long, value_name = "FLOAT", default_value = "1.0")]
         exposure: f32,
+
+        /// Inversion mode: "linear" (default), "log", or "divide-blend" (G2P-style)
+        #[arg(long, value_name = "MODE")]
+        inversion: Option<String>,
+
+        /// Manual base RGB values (comma-separated: R,G,B)
+        /// Overrides automatic base estimation
+        #[arg(long, value_name = "R,G,B")]
+        base: Option<String>,
+
+        /// Skip auto-levels (histogram stretching)
+        #[arg(long)]
+        no_auto_levels: bool,
+
+        /// Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
+        /// Sets output range to approximately 0.005-0.98 like Grain2Pixel
+        #[arg(long)]
+        preserve_headroom: bool,
 
         /// Enable debug output showing intermediate statistics
         #[arg(long)]
@@ -263,6 +284,10 @@ fn main() {
             no_tonecurve,
             no_colormatrix,
             exposure,
+            inversion,
+            base,
+            no_auto_levels,
+            preserve_headroom,
             debug,
         } => cmd_convert(
             input,
@@ -278,6 +303,10 @@ fn main() {
             no_tonecurve,
             no_colormatrix,
             exposure,
+            inversion,
+            base,
+            no_auto_levels,
+            preserve_headroom,
             debug,
         ),
 
@@ -366,7 +395,7 @@ fn cmd_convert(
     input: PathBuf,
     out: Option<PathBuf>,
     preset: Option<PathBuf>,
-    _scan_profile: Option<PathBuf>,
+    scan_profile_path: Option<PathBuf>,
     roi: Option<String>,
     base_method: String,
     border_percent: f32,
@@ -376,6 +405,10 @@ fn cmd_convert(
     no_tonecurve: bool,
     no_colormatrix: bool,
     exposure: f32,
+    inversion: Option<String>,
+    base: Option<String>,
+    no_auto_levels: bool,
+    preserve_headroom: bool,
     debug: bool,
 ) -> Result<(), String> {
     invers_core::config::log_config_usage();
@@ -390,37 +423,73 @@ fn cmd_convert(
         decoded.width, decoded.height, decoded.channels
     );
 
-    // Parse ROI if provided
-    let roi_rect = if let Some(roi_str) = roi {
-        Some(parse_roi(&roi_str)?)
+    // Load scan profile if provided
+    let scan_profile = if let Some(profile_path) = scan_profile_path {
+        println!("Loading scan profile from {}...", profile_path.display());
+        let profile = invers_core::presets::load_scan_profile(&profile_path)?;
+        println!("  Profile: {} ({})", profile.name, profile.source_type);
+        if let Some(ref hsl) = profile.hsl_adjustments {
+            if hsl.has_adjustments() {
+                println!("  HSL adjustments: enabled");
+            }
+        }
+        if let Some(gamma) = profile.default_gamma {
+            println!("  Default gamma: [{:.2}, {:.2}, {:.2}]", gamma[0], gamma[1], gamma[2]);
+        }
+        Some(profile)
     } else {
         None
     };
 
-    // Parse base estimation method
-    let method = match base_method.to_lowercase().as_str() {
-        "border" => Some(invers_core::models::BaseEstimationMethod::Border),
-        "regions" | _ => Some(invers_core::models::BaseEstimationMethod::Regions),
-    };
-
-    // Estimate or load base
-    println!("Estimating film base...");
-    let base_estimation = invers_core::pipeline::estimate_base(
-        &decoded,
-        roi_rect,
-        method,
-        Some(border_percent),
-    )?;
-    println!(
-        "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
-        base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
-    );
-    if let Some(noise) = &base_estimation.noise_stats {
+    // Parse manual base values or estimate
+    let base_estimation = if let Some(base_str) = base {
+        // Parse manual base values (R,G,B format)
+        let base_rgb = parse_base_rgb(&base_str)?;
+        println!("Using manual base values...");
         println!(
-            "  Noise (RGB): [{:.4}, {:.4}, {:.4}]",
-            noise[0], noise[1], noise[2]
+            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+            base_rgb[0], base_rgb[1], base_rgb[2]
         );
-    }
+        invers_core::models::BaseEstimation {
+            roi: None,
+            medians: base_rgb,
+            noise_stats: None,
+            auto_estimated: false,
+        }
+    } else {
+        // Parse ROI if provided
+        let roi_rect = if let Some(roi_str) = roi {
+            Some(parse_roi(&roi_str)?)
+        } else {
+            None
+        };
+
+        // Parse base estimation method
+        let method = match base_method.to_lowercase().as_str() {
+            "border" => Some(invers_core::models::BaseEstimationMethod::Border),
+            "regions" | _ => Some(invers_core::models::BaseEstimationMethod::Regions),
+        };
+
+        // Estimate base
+        println!("Estimating film base...");
+        let estimation = invers_core::pipeline::estimate_base(
+            &decoded,
+            roi_rect,
+            method,
+            Some(border_percent),
+        )?;
+        println!(
+            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+            estimation.medians[0], estimation.medians[1], estimation.medians[2]
+        );
+        if let Some(noise) = &estimation.noise_stats {
+            println!(
+                "  Noise (RGB): [{:.4}, {:.4}, {:.4}]",
+                noise[0], noise[1], noise[2]
+            );
+        }
+        estimation
+    };
 
     // Load film preset if provided
     let film_preset = if let Some(preset_path) = preset {
@@ -439,17 +508,34 @@ fn cmd_convert(
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
 
+    // Parse inversion mode if specified
+    let inversion_mode = parse_inversion_mode(inversion.as_deref())?;
+    if let Some(mode) = &inversion_mode {
+        println!("Using inversion mode: {:?}", mode);
+    }
+
+    if no_auto_levels {
+        println!("Auto-levels disabled");
+    }
+    if preserve_headroom {
+        println!("Preserving shadow/highlight headroom");
+    }
+
     // Build conversion options using shared utility
-    let options = build_convert_options(
+    let options = build_convert_options_full(
         input.clone(),
         output_dir,
         &export,
         colorspace,
         Some(base_estimation),
         film_preset,
+        scan_profile,
         no_tonecurve,
         no_colormatrix,
         exposure,
+        inversion_mode,
+        no_auto_levels,
+        preserve_headroom,
         debug,
     )?;
 

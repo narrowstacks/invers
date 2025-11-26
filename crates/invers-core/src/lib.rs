@@ -14,4 +14,5 @@ pub mod presets;
 pub mod testing;
 
 // Re-export commonly used types
-pub use models::{BaseEstimation, ConvertOptions, FilmPreset, ScanProfile};
+pub use color::{Hsl, Lab};
+pub use models::{BaseEstimation, ConvertOptions, FilmPreset, HslAdjustments, ScanProfile};

@@ -57,6 +57,7 @@ impl PipelineConfig {
 pub struct PipelineDefaults {
     pub enable_auto_levels: bool,
     pub auto_levels_clip_percent: f32,
+    pub preserve_headroom: bool,
     pub enable_auto_color: bool,
     pub auto_color_strength: f32,
     pub auto_color_min_gain: f32,
@@ -100,6 +101,7 @@ impl Default for PipelineDefaults {
         Self {
             enable_auto_levels: true,
             auto_levels_clip_percent: 0.25,
+            preserve_headroom: true,
             enable_auto_color: true,
             auto_color_strength: 0.6,
             auto_color_min_gain: 0.7,
@@ -116,7 +118,7 @@ impl Default for PipelineDefaults {
             auto_exposure_min_gain: 0.6,
             auto_exposure_max_gain: 1.4,
             exposure_compensation: 1.0,
-            skip_tone_curve: false,
+            skip_tone_curve: true,
             skip_color_matrix: false,
         }
     }
