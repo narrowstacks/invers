@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./target/release/invers-cli:*)",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/seattle-01 002.tiff\" )",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/TIFF/seattle-01 002_48Bit_g2p0001.tif\" )",
+      "Bash(cargo build:*)",
+      "Bash(time ./target/release/invers-cli test-params:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

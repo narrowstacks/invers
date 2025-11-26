@@ -51,10 +51,19 @@ pub fn decode_image<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
 fn decode_tiff<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     use std::fs::File;
     use std::io::BufReader;
+    use tiff::decoder::Limits;
 
     let file = File::open(path.as_ref()).map_err(|e| format!("Failed to open TIFF file: {}", e))?;
+
+    // Configure limits for large film scans (up to 1GB uncompressed)
+    let mut limits = Limits::default();
+    limits.decoding_buffer_size = 1024 * 1024 * 1024; // 1GB
+    limits.ifd_value_size = 1024 * 1024 * 1024;
+    limits.intermediate_buffer_size = 1024 * 1024 * 1024;
+
     let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
-        .map_err(|e| format!("Failed to create TIFF decoder: {}", e))?;
+        .map_err(|e| format!("Failed to create TIFF decoder: {}", e))?
+        .with_limits(limits);
 
     // Get image dimensions
     let (width, height) = decoder

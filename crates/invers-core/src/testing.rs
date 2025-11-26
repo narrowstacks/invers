@@ -4,10 +4,10 @@
 //! conversion results against reference images.
 
 use crate::config;
-use crate::decoders::decode_image;
+use crate::decoders::{decode_image, DecodedImage};
 use crate::diagnostics::{compare_conversions, DiagnosticReport};
 use crate::models::{
-    BaseSamplingMode, ConvertOptions, InversionMode, OutputFormat, ShadowLiftMode,
+    BaseEstimation, BaseSamplingMode, ConvertOptions, InversionMode, OutputFormat, ShadowLiftMode,
 };
 use crate::pipeline::{estimate_base, process_image};
 use rayon::prelude::*;
@@ -84,6 +84,49 @@ pub struct TestResult {
     pub contrast_ratio: f32,
     pub overall_score: f32,        // Lower is better
     pub base_estimation: [f32; 3], // RGB base values used
+}
+
+/// Pre-loaded test context to avoid redundant image loading and base estimation
+/// This dramatically improves performance for grid/adaptive searches
+pub struct PreloadedTestContext {
+    /// Original negative image (pre-decoded)
+    pub original: DecodedImage,
+    /// Reference image to compare against (pre-decoded)
+    pub reference: DecodedImage,
+    /// Pre-computed base estimation from original
+    pub base_estimation: BaseEstimation,
+}
+
+impl PreloadedTestContext {
+    /// Create a new preloaded context by loading images and computing base estimation once
+    pub fn new<P: AsRef<Path>>(original_path: P, reference_path: P) -> Result<Self, String> {
+        eprintln!("[PRELOAD] Loading original negative...");
+        let original = decode_image(original_path)?;
+        eprintln!(
+            "[PRELOAD] Original: {}x{}, {} channels",
+            original.width, original.height, original.channels
+        );
+
+        eprintln!("[PRELOAD] Loading reference image...");
+        let reference = decode_image(reference_path)?;
+        eprintln!(
+            "[PRELOAD] Reference: {}x{}, {} channels",
+            reference.width, reference.height, reference.channels
+        );
+
+        eprintln!("[PRELOAD] Computing base estimation...");
+        let base_estimation = estimate_base(&original, None, None, None)?;
+        eprintln!(
+            "[PRELOAD] Base RGB: [{:.4}, {:.4}, {:.4}]",
+            base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
+        );
+
+        Ok(Self {
+            original,
+            reference,
+            base_estimation,
+        })
+    }
 }
 
 /// Parameter grid for exhaustive search
@@ -206,6 +249,71 @@ pub fn run_parameter_test<P: AsRef<Path>>(
 
     // Compare against reference
     let report = compare_conversions(&processed, &reference)?;
+
+    // Calculate overall score (weighted combination of errors)
+    let overall_score = calculate_score(&report);
+
+    Ok(TestResult {
+        params: params.clone(),
+        mae_r: report.difference_stats[0].mean,
+        mae_g: report.difference_stats[1].mean,
+        mae_b: report.difference_stats[2].mean,
+        exposure_ratio: report.exposure_ratio,
+        color_shift: report.color_shift,
+        contrast_ratio: calculate_contrast_ratio(&report),
+        overall_score,
+        base_estimation: base_rgb,
+    })
+}
+
+/// Run a parameter test using preloaded context (much faster for grid searches)
+/// This avoids redundant image loading and base estimation
+pub fn run_parameter_test_preloaded(
+    ctx: &PreloadedTestContext,
+    params: &ParameterTest,
+) -> Result<TestResult, String> {
+    let base_rgb = ctx.base_estimation.medians;
+
+    // Build conversion options from test parameters
+    let options = ConvertOptions {
+        input_paths: vec![],
+        output_dir: std::path::PathBuf::from("."),
+        output_format: OutputFormat::Tiff16,
+        working_colorspace: "linear-rec2020".to_string(),
+        bit_depth_policy: crate::models::BitDepthPolicy::Force16Bit,
+        film_preset: None,
+        scan_profile: None,
+        base_estimation: Some(ctx.base_estimation.clone()),
+        num_threads: None,
+        skip_tone_curve: params.skip_tone_curve,
+        skip_color_matrix: true, // Skip for testing
+        exposure_compensation: params.exposure_compensation,
+        debug: false,
+        enable_auto_levels: params.enable_auto_levels,
+        auto_levels_clip_percent: params.clip_percent,
+        preserve_headroom: false,
+        enable_auto_color: params.enable_auto_color,
+        auto_color_strength: params.auto_color_strength,
+        auto_color_min_gain: params.auto_color_min_gain,
+        auto_color_max_gain: params.auto_color_max_gain,
+        base_brightest_percent: params.base_brightest_percent,
+        base_sampling_mode: params.base_sampling_mode,
+        inversion_mode: params.inversion_mode,
+        shadow_lift_mode: params.shadow_lift_mode,
+        shadow_lift_value: params.shadow_lift_value,
+        highlight_compression: params.highlight_compression,
+        enable_auto_exposure: params.enable_auto_exposure,
+        auto_exposure_target_median: params.auto_exposure_target_median,
+        auto_exposure_strength: params.auto_exposure_strength,
+        auto_exposure_min_gain: params.auto_exposure_min_gain,
+        auto_exposure_max_gain: params.auto_exposure_max_gain,
+    };
+
+    // Process with our pipeline - clone original since process_image consumes it
+    let processed = process_image(ctx.original.clone(), &options)?;
+
+    // Compare against reference
+    let report = compare_conversions(&processed, &ctx.reference)?;
 
     // Calculate overall score (weighted combination of errors)
     let overall_score = calculate_score(&report);
@@ -541,18 +649,8 @@ pub fn print_test_result(result: &TestResult, rank: usize) {
     );
 }
 
-/// Run parameter grid search in parallel using Rayon
-/// Much faster than sequential search, especially for large grids
-pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
-    original_path: P,
-    reference_path: P,
-    grid: &ParameterGrid,
-    target_score: Option<f32>,
-) -> Result<Vec<TestResult>, String> {
-    let original_path = original_path.as_ref();
-    let reference_path = reference_path.as_ref();
-
-    // Build all parameter combinations first
+/// Build all parameter combinations from a grid
+fn build_parameter_combinations(grid: &ParameterGrid) -> Vec<ParameterTest> {
     let mut combinations = Vec::new();
 
     for &auto_levels in &grid.auto_levels {
@@ -566,8 +664,7 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
                                     for &inversion_mode in &grid.inversion_mode {
                                         for &shadow_lift_mode in &grid.shadow_lift_mode {
                                             for &shadow_lift_value in &grid.shadow_lift_value {
-                                                for &tone_curve_strength in
-                                                    &grid.tone_curve_strength
+                                                for &tone_curve_strength in &grid.tone_curve_strength
                                                 {
                                                     for &exposure_compensation in
                                                         &grid.exposure_compensation
@@ -608,6 +705,23 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
         }
     }
 
+    combinations
+}
+
+/// Run parameter grid search in parallel using Rayon with preloaded images
+/// Much faster than the old version - images are loaded once and shared
+pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
+    original_path: P,
+    reference_path: P,
+    grid: &ParameterGrid,
+    target_score: Option<f32>,
+) -> Result<Vec<TestResult>, String> {
+    // OPTIMIZATION: Preload images and base estimation ONCE
+    let ctx = Arc::new(PreloadedTestContext::new(original_path, reference_path)?);
+
+    // Build all parameter combinations
+    let combinations = build_parameter_combinations(grid);
+
     let total_combinations = combinations.len();
     eprintln!(
         "[PARALLEL GRID SEARCH] Testing {} parameter combinations...",
@@ -625,7 +739,7 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
     let completed = Arc::new(AtomicUsize::new(0));
     let best_score = Arc::new(std::sync::Mutex::new(f32::MAX));
 
-    // Process in parallel with Rayon
+    // Process in parallel with Rayon using preloaded context
     let results: Vec<TestResult> = combinations
         .par_iter()
         .filter_map(|params| {
@@ -638,7 +752,8 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
                 }
             }
 
-            match run_parameter_test(original_path, reference_path, params, None::<&Path>) {
+            // Use preloaded context - no more redundant I/O!
+            match run_parameter_test_preloaded(&ctx, params) {
                 Ok(result) => {
                     // Update best score
                     if let Ok(mut current_best) = best_score.lock() {
@@ -688,22 +803,90 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
     Ok(sorted_results)
 }
 
+/// Run parameter grid search using a preloaded context (internal helper)
+/// This avoids loading images multiple times in adaptive search
+fn run_grid_search_with_context(
+    ctx: &Arc<PreloadedTestContext>,
+    grid: &ParameterGrid,
+    target_score: Option<f32>,
+) -> Result<Vec<TestResult>, String> {
+    let combinations = build_parameter_combinations(grid);
+    let total_combinations = combinations.len();
+
+    eprintln!(
+        "[GRID SEARCH] Testing {} parameter combinations...",
+        total_combinations
+    );
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let best_score = Arc::new(std::sync::Mutex::new(f32::MAX));
+
+    let results: Vec<TestResult> = combinations
+        .par_iter()
+        .filter_map(|params| {
+            if let Some(target) = target_score {
+                if let Ok(current_best) = best_score.lock() {
+                    if *current_best <= target {
+                        return None;
+                    }
+                }
+            }
+
+            match run_parameter_test_preloaded(ctx, params) {
+                Ok(result) => {
+                    if let Ok(mut current_best) = best_score.lock() {
+                        if result.overall_score < *current_best {
+                            *current_best = result.overall_score;
+                            eprintln!(
+                                "[GRID SEARCH] New best score: {:.4}",
+                                result.overall_score
+                            );
+                        }
+                    }
+
+                    let count = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if count.is_multiple_of(10) || count == total_combinations {
+                        eprintln!("[GRID SEARCH] Progress: {}/{}", count, total_combinations);
+                    }
+
+                    Some(result)
+                }
+                Err(e) => {
+                    eprintln!("[GRID SEARCH] Test failed: {}", e);
+                    completed.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let mut sorted_results = results;
+    sorted_results.sort_by(|a, b| {
+        a.overall_score
+            .partial_cmp(&b.overall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(sorted_results)
+}
+
 /// Adaptive grid search - starts coarse, refines around best results
 /// More efficient than exhaustive search for finding optimal parameters
+/// OPTIMIZED: Loads images once and reuses across all iterations
 pub fn run_adaptive_grid_search<P: AsRef<Path>>(
     original_path: P,
     reference_path: P,
     target_score: f32,
     max_iterations: usize,
 ) -> Result<Vec<TestResult>, String> {
-    let original_path = original_path.as_ref();
-    let reference_path = reference_path.as_ref();
-
     eprintln!("[ADAPTIVE SEARCH] Starting adaptive parameter search");
     eprintln!(
         "[ADAPTIVE SEARCH] Target score: {:.4}, Max iterations: {}",
         target_score, max_iterations
     );
+
+    // OPTIMIZATION: Load images ONCE for all iterations
+    let ctx = Arc::new(PreloadedTestContext::new(original_path, reference_path)?);
 
     let mut all_results = Vec::new();
     let mut best_params = ParameterTest::default();
@@ -727,12 +910,7 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
         exposure_compensation: vec![1.0],
     };
 
-    let mut results = run_parameter_grid_search_parallel(
-        original_path,
-        reference_path,
-        &coarse_grid,
-        Some(target_score),
-    )?;
+    let mut results = run_grid_search_with_context(&ctx, &coarse_grid, Some(target_score))?;
 
     if let Some(best) = results.first() {
         best_score = best.overall_score;
@@ -802,12 +980,8 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
             exposure_compensation: vec![best_params.exposure_compensation],
         };
 
-        let mut iteration_results = run_parameter_grid_search_parallel(
-            original_path,
-            reference_path,
-            &refined_grid,
-            Some(target_score),
-        )?;
+        let mut iteration_results =
+            run_grid_search_with_context(&ctx, &refined_grid, Some(target_score))?;
 
         if let Some(best) = iteration_results.first() {
             if best.overall_score < best_score {
