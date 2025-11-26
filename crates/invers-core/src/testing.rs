@@ -1,7 +1,7 @@
 //! Parameter testing and optimization infrastructure
 //!
 //! Provides tools for testing different parameter combinations to optimize
-//! conversion results against reference images (e.g., Grain2Pixel).
+//! conversion results against reference images.
 
 use crate::config;
 use crate::decoders::decode_image;

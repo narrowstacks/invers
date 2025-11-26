@@ -17,7 +17,7 @@ pub enum AutoLevelsMode {
     PreserveSaturation,
 }
 
-/// Per-channel levels parameters for G2P-style complete levels control
+/// Per-channel levels parameters for complete levels control
 #[derive(Debug, Clone, Copy)]
 pub struct LevelsParams {
     /// Input black point (0.0-1.0)
@@ -65,7 +65,7 @@ impl LevelsParams {
 }
 
 /// Auto-levels: Stretch histogram to full 0.0-1.0 range per channel
-/// This is the key missing step that Photoshop/Grain2Pixel applies
+/// This is the key step that Photoshop applies
 ///
 /// Uses histogram-based percentile finding to avoid copying all channel data.
 /// Memory usage: O(buckets * 3) instead of O(n * 3)
@@ -176,12 +176,12 @@ pub fn auto_levels_with_mode(
 
 /// Full Photoshop-style per-channel levels with gamma and output range
 ///
-/// Similar to G2P's `setLevelsComplete()` - provides complete control over:
+/// Provides complete control over:
 /// - Per-channel input black/white points
 /// - Per-channel gamma correction
 /// - Per-channel output black/white points
 ///
-/// This is the G2P-style levels adjustment that goes beyond simple auto_levels.
+/// This is a comprehensive levels adjustment that goes beyond simple auto_levels.
 pub fn apply_levels_complete(data: &mut [f32], r: &LevelsParams, g: &LevelsParams, b: &LevelsParams) {
     for pixel in data.chunks_exact_mut(3) {
         pixel[0] = apply_levels_single(pixel[0], r);
@@ -290,7 +290,7 @@ pub fn auto_levels_with_gamma(
 /// Auto-levels with automatic gamma calculation to target a specific midpoint
 ///
 /// Calculates gamma values to bring each channel's midpoint to the target value.
-/// This is similar to G2P's auto-contrast behavior.
+/// This is similar to auto-contrast behavior.
 pub fn auto_levels_with_target_midpoint(
     data: &mut [f32],
     channels: u8,
@@ -550,7 +550,7 @@ fn find_percentile_via_histogram(data: &[f32], percentile: f32) -> f32 {
 }
 
 // =============================================================================
-// Histogram Utilities (G2P-inspired)
+// Histogram Utilities
 // =============================================================================
 
 /// Result of histogram ends detection
@@ -566,7 +566,7 @@ pub struct HistogramEnds {
 
 /// Find first and last non-zero histogram bins
 ///
-/// Similar to G2P's `getArrayEnds()` - finds the actual data range without percentile clipping.
+/// Finds the actual data range without percentile clipping.
 /// Useful for detecting true black/white points in an image.
 ///
 /// Returns normalized values (0.0-1.0) for the first and last non-empty bins.
@@ -680,9 +680,8 @@ pub struct OtsuResult {
 
 /// Otsu's method for automatic thresholding
 ///
-/// Similar to G2P's `otsu()` - finds the optimal threshold that separates
-/// an image into two classes (e.g., film base vs image content) by maximizing
-/// inter-class variance.
+/// Finds the optimal threshold that separates an image into two classes
+/// (e.g., film base vs image content) by maximizing inter-class variance.
 ///
 /// This is useful for automatically detecting the boundary between
 /// unexposed film base and actual image content.
@@ -771,8 +770,8 @@ pub fn otsu_threshold_rgb(data: &[f32]) -> OtsuResult {
 
 /// Measure dark/mid/light population percentages
 ///
-/// Similar to G2P's `measureDarkMidLight()` - returns the percentage of pixels
-/// in dark (0-0.25), mid (0.25-0.75), and light (0.75-1.0) regions.
+/// Returns the percentage of pixels in dark (0-0.25), mid (0.25-0.75),
+/// and light (0.75-1.0) regions.
 ///
 /// Returns (dark_percent, mid_percent, light_percent)
 pub fn measure_dark_mid_light(data: &[f32]) -> (f32, f32, f32) {

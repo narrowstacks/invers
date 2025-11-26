@@ -92,7 +92,7 @@ pub fn process_image(
             );
         }
 
-        // Apply headroom preservation if requested (G2P-style output range)
+        // Apply headroom preservation if requested
         if options.preserve_headroom {
             apply_headroom(&mut data);
             if options.debug {
@@ -1231,7 +1231,7 @@ pub fn invert_negative(
             }
         }
         crate::models::InversionMode::DivideBlend => {
-            // Grain2Pixel-style divide blend inversion:
+            // Divide blend inversion:
             // 1. Divide: pixel / base (per channel)
             // 2. Apply gamma 2.2 (like Photoshop's Exposure layer)
             // 3. Invert: 1.0 - result
@@ -1580,12 +1580,12 @@ fn compute_stats(data: &[f32]) -> (f32, f32, f32) {
     (min, max, mean)
 }
 
-/// Apply G2P-style headroom preservation
+/// Apply headroom preservation
 ///
 /// Remaps output from 0-1 range to approximately 0.005-0.98 range
-/// to preserve shadow and highlight detail like Grain2Pixel does.
+/// to preserve shadow and highlight detail.
 ///
-/// G2P characteristics:
+/// Characteristics:
 /// - Minimum luminance: ~0.005 (lifted shadows)
 /// - Maximum luminance: ~0.98 (preserved highlights)
 fn apply_headroom(data: &mut [f32]) {

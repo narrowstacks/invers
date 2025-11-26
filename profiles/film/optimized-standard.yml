@@ -1,12 +1,12 @@
 # Optimized Standard Color Negative Preset
-# Based on comprehensive parameter testing against Grain2Pixel references
+# Based on comprehensive parameter testing against reference images
 #
 # This preset represents the optimal settings discovered through
 # systematic testing and comparison with professional conversion software.
 #
 # Test methodology:
 # - Grid search over 24+ parameter combinations
-# - Comparison against Grain2Pixel v5.5.2 beta
+# - Comparison against professional reference conversions
 # - Scored on MAE, exposure matching, and color accuracy
 #
 # Best results on:
@@ -34,7 +34,7 @@ tone_curve:
 
 # Notes about this preset
 notes: |
-  Optimized through systematic testing to match Grain2Pixel results.
+  Optimized through systematic testing to match professional conversion results.
 
   OPTIMAL SETTINGS (Built into defaults as of this version):
   ✓ enable_auto_levels: true
@@ -48,7 +48,7 @@ notes: |
   ✓ exposure_compensation: 1.0
 
   PERFORMANCE:
-  - Exposure match: ±0.05 (5%) of Grain2Pixel
+  - Exposure match: ±0.05 (5%) of reference
   - Color accuracy: <0.02 shift per channel
   - Overall MAE: <0.10 (excellent)
   - Test score: <0.08 (optimal)
@@ -71,4 +71,4 @@ notes: |
   major color shifts that were preventing accurate conversion.
 
   The combination of auto-levels + moderate S-curve (0.55 strength)
-  produces results nearly indistinguishable from Grain2Pixel.
+  produces results nearly indistinguishable from professional conversions.

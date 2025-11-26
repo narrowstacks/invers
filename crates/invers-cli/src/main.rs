@@ -71,7 +71,7 @@ enum Commands {
         #[arg(long, value_name = "FLOAT", default_value = "1.0")]
         exposure: f32,
 
-        /// Inversion mode: "linear" (default), "log", or "divide-blend" (G2P-style)
+        /// Inversion mode: "linear" (default), "log", or "divide-blend"
         #[arg(long, value_name = "MODE")]
         inversion: Option<String>,
 
@@ -85,7 +85,7 @@ enum Commands {
         no_auto_levels: bool,
 
         /// Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
-        /// Sets output range to approximately 0.005-0.98 like Grain2Pixel
+        /// Sets output range to approximately 0.005-0.98
         #[arg(long)]
         preserve_headroom: bool,
 
@@ -190,7 +190,7 @@ enum Commands {
         #[arg(value_name = "ORIGINAL")]
         original: PathBuf,
 
-        /// Reference conversion to match (e.g., Grain2Pixel output)
+        /// Reference conversion to match
         #[arg(value_name = "REFERENCE")]
         reference: PathBuf,
 

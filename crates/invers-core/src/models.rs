@@ -133,7 +133,7 @@ pub struct WhiteBalanceHints {
     pub tint: Option<f32>,
 }
 
-/// 8-color HSL adjustments (Grain2Pixel/Camera Raw style)
+/// 8-color HSL adjustments (Camera Raw style)
 ///
 /// Adjusts Hue, Saturation, and Luminance for 8 color ranges:
 /// - R (Reds): Hue ~0-30, 330-360
@@ -259,7 +259,7 @@ pub struct ConvertOptions {
     pub auto_levels_clip_percent: f32,
 
     /// Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
-    /// When true, output range is approximately 0.005-0.98 like Grain2Pixel
+    /// When true, output range is approximately 0.005-0.98
     #[serde(default = "default_false")]
     pub preserve_headroom: bool,
 
@@ -438,7 +438,7 @@ pub enum InversionMode {
     /// Logarithmic inversion: 10^(log10(base) - log10(negative))
     Logarithmic,
 
-    /// Divide-blend inversion (Grain2Pixel style):
+    /// Divide-blend inversion:
     /// 1. Divide: pixel / base (per channel)
     /// 2. Apply gamma 2.2 (convert from linear to gamma-encoded)
     /// 3. Invert: 1.0 - result

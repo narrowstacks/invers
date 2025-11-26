@@ -128,7 +128,7 @@ pub fn determine_output_path(
 
 /// Parse inversion mode from string
 ///
-/// Supported values: "linear" (default), "log"/"logarithmic", "divide-blend"/"g2p"
+/// Supported values: "linear" (default), "log"/"logarithmic", "divide-blend"
 pub fn parse_inversion_mode(
     mode_str: Option<&str>,
 ) -> Result<Option<invers_core::models::InversionMode>, String> {
@@ -137,7 +137,7 @@ pub fn parse_inversion_mode(
         Some(s) => match s.to_lowercase().as_str() {
             "linear" => Ok(Some(invers_core::models::InversionMode::Linear)),
             "log" | "logarithmic" => Ok(Some(invers_core::models::InversionMode::Logarithmic)),
-            "divide-blend" | "divide" | "g2p" | "grain2pixel" => {
+            "divide-blend" | "divide" => {
                 Ok(Some(invers_core::models::InversionMode::DivideBlend))
             }
             _ => Err(format!(

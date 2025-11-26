@@ -360,7 +360,7 @@ pub fn lab_array_to_rgb(lab_data: &[Lab]) -> Vec<f32> {
 }
 
 // =============================================================================
-// 8-Color HSL Adjustments (G2P/Camera Raw style)
+// 8-Color HSL Adjustments (Camera Raw style)
 // =============================================================================
 
 /// Get the color range index (0-7) and blend weight for a given hue
@@ -441,7 +441,7 @@ fn hue_distance(h1: f32, h2: f32) -> f32 {
 
 /// Apply 8-color HSL adjustments to RGB data in place
 ///
-/// This is the G2P/Camera Raw style HSL adjustment that affects
+/// This is the Camera Raw style HSL adjustment that affects
 /// specific color ranges independently.
 pub fn apply_hsl_adjustments(
     data: &mut [f32],

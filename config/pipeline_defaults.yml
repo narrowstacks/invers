@@ -11,7 +11,7 @@ defaults:
   auto_levels_clip_percent: 0.25
 
   # Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
-  # When true, output range is approximately 0.005-0.98 like Grain2Pixel
+  # When true, output range is approximately 0.005-0.98
   preserve_headroom: true
 
   # Enable automatic white balance / color correction (true/false)
