@@ -340,6 +340,17 @@ pub enum BaseSamplingMode {
     Max,
 }
 
+/// Method for automatic base estimation region selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BaseEstimationMethod {
+    /// Sample discrete border regions (top, bottom, left, right) individually
+    #[default]
+    Regions,
+
+    /// Sample outer N% of entire image as continuous border frame
+    Border,
+}
+
 /// Inversion mode for negative-to-positive conversion
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum InversionMode {

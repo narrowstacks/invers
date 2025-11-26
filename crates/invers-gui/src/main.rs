@@ -247,7 +247,7 @@ impl InversApp {
                 self.reset_parameters();
 
                 // Auto-estimate base from the loaded image
-                match estimate_base(&image, None) {
+                match estimate_base(&image, None, None, None) {
                     Ok(base) => {
                         self.base_r = base.medians[0];
                         self.base_g = base.medians[1];

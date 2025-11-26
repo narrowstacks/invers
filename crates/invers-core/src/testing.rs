@@ -157,7 +157,7 @@ pub fn run_parameter_test<P: AsRef<Path>>(
     let reference = decode_image(reference_path)?;
 
     // Estimate base from original
-    let base_estimation = estimate_base(&original, None)?;
+    let base_estimation = estimate_base(&original, None, None, None)?;
     let base_rgb = base_estimation.medians;
 
     // Build conversion options from test parameters

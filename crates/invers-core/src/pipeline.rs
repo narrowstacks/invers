@@ -4,7 +4,7 @@
 
 use crate::config;
 use crate::decoders::DecodedImage;
-use crate::models::{BaseEstimation, ConvertOptions};
+use crate::models::{BaseEstimation, BaseEstimationMethod, ConvertOptions};
 use rayon::prelude::*;
 
 /// Prevent values from ever hitting absolute black/white while retaining full range.
@@ -231,30 +231,101 @@ pub fn process_image(
     })
 }
 
-/// Estimate film base from ROI or heuristic
+/// Estimate film base from ROI, border, or heuristic regions
+///
+/// # Arguments
+/// * `image` - The decoded image to analyze
+/// * `roi` - Optional manual ROI (x, y, width, height). If provided, overrides method.
+/// * `method` - Base estimation method (Regions or Border). Defaults to Regions.
+/// * `border_percent` - Border percentage for Border method (1-25%). Defaults to 5.0.
 pub fn estimate_base(
     image: &DecodedImage,
     roi: Option<(u32, u32, u32, u32)>,
+    method: Option<BaseEstimationMethod>,
+    border_percent: Option<f32>,
+) -> Result<BaseEstimation, String> {
+    let method = method.unwrap_or_default();
+    let border_pct = border_percent.unwrap_or(5.0);
+
+    // If ROI is provided, use manual mode regardless of method
+    if let Some(rect) = roi {
+        return estimate_base_from_manual_roi(image, rect);
+    }
+
+    // Otherwise, use the specified method
+    match method {
+        BaseEstimationMethod::Border => estimate_base_from_border(image, border_pct),
+        BaseEstimationMethod::Regions => estimate_base_from_regions(image),
+    }
+}
+
+/// Estimate film base from a manually specified ROI
+fn estimate_base_from_manual_roi(
+    image: &DecodedImage,
+    rect: (u32, u32, u32, u32),
 ) -> Result<BaseEstimation, String> {
     let sample_fraction = base_sample_fraction();
+    let candidate = BaseRoiCandidate::from_manual_roi(image, rect);
 
-    let mut candidates = if let Some(rect) = roi {
-        vec![BaseRoiCandidate::from_manual_roi(image, rect)]
+    let (x, y, width, height) = candidate.rect;
+
+    if x + width > image.width || y + height > image.height || width == 0 || height == 0 {
+        return Err(format!(
+            "ROI out of bounds: {}x{} at ({}, {})",
+            width, height, x, y
+        ));
+    }
+
+    let roi_pixels = extract_roi_pixels(image, x, y, width, height);
+    if roi_pixels.is_empty() {
+        return Err("ROI contains no pixels".to_string());
+    }
+
+    let (num_brightest, percentage, medians, noise_stats) =
+        compute_base_stats(&roi_pixels, sample_fraction);
+
+    eprintln!(
+        "[BASE] Manual ROI | using {} px ({:.1}%) brightest",
+        num_brightest, percentage
+    );
+    eprintln!(
+        "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
+        medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+    );
+
+    let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
+
+    if !valid {
+        eprintln!("[BASE]   -> manual ROI has warnings: {}", reason);
+        eprintln!("[BASE]   -> using despite warnings (manual ROI)");
     } else {
-        estimate_base_roi_candidates(image)
-    };
+        eprintln!("[BASE]   -> accepted");
+    }
+
+    Ok(BaseEstimation {
+        roi: Some(rect),
+        medians,
+        noise_stats: Some(noise_stats),
+        auto_estimated: false,
+    })
+}
+
+/// Estimate film base using discrete border regions (top, bottom, left, right)
+fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, String> {
+    let sample_fraction = base_sample_fraction();
+
+    let mut candidates = estimate_base_roi_candidates(image);
 
     if candidates.is_empty() {
         return Err("Failed to determine film base ROI".to_string());
     }
 
-    if roi.is_none() {
-        candidates.sort_by(|a, b| {
-            b.brightness
-                .partial_cmp(&a.brightness)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+    // Sort by brightness (brightest first)
+    candidates.sort_by(|a, b| {
+        b.brightness
+            .partial_cmp(&a.brightness)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut fallback: Option<BaseEstimation> = None;
 
@@ -298,7 +369,7 @@ pub fn estimate_base(
                 roi: Some(candidate.rect),
                 medians,
                 noise_stats: Some(noise_stats),
-                auto_estimated: roi.is_none(),
+                auto_estimated: true,
             });
         } else {
             eprintln!("[BASE]   -> rejected: {}", reason);
@@ -307,17 +378,7 @@ pub fn estimate_base(
                     roi: Some(candidate.rect),
                     medians,
                     noise_stats: Some(noise_stats),
-                    auto_estimated: roi.is_none(),
-                });
-            }
-
-            if candidate.manual {
-                eprintln!("[BASE]   -> manual ROI provided; using despite warnings");
-                return Ok(BaseEstimation {
-                    roi: Some(candidate.rect),
-                    medians,
-                    noise_stats: Some(noise_stats),
-                    auto_estimated: false,
+                    auto_estimated: true,
                 });
             }
         }
@@ -345,7 +406,6 @@ struct BaseRoiCandidate {
     rect: (u32, u32, u32, u32),
     brightness: f32,
     label: &'static str,
-    manual: bool,
 }
 
 impl BaseRoiCandidate {
@@ -354,7 +414,6 @@ impl BaseRoiCandidate {
             rect,
             brightness,
             label,
-            manual: false,
         }
     }
 
@@ -364,7 +423,6 @@ impl BaseRoiCandidate {
             rect,
             brightness,
             label: "manual",
-            manual: true,
         }
     }
 }
@@ -502,6 +560,119 @@ fn extract_roi_pixels(
     }
 
     pixels
+}
+
+/// Extract pixels from the outer border region of an image
+///
+/// The border is defined as the outer N% of the image dimensions, forming
+/// a rectangular frame. A pixel is included if:
+/// - x < border_width OR x >= (width - border_width), OR
+/// - y < border_height OR y >= (height - border_height)
+///
+/// This is useful for sampling film base from full-frame scans that include
+/// the rebate/sprocket area around the edges.
+fn extract_border_pixels(image: &DecodedImage, border_percent: f32) -> Vec<[f32; 3]> {
+    let border_percent = border_percent.clamp(1.0, 25.0);
+    let border_width = ((image.width as f32) * border_percent / 100.0).ceil() as u32;
+    let border_height = ((image.height as f32) * border_percent / 100.0).ceil() as u32;
+
+    // Calculate border area for pre-allocation
+    // Border area = total area - inner area
+    let inner_width = image.width.saturating_sub(2 * border_width);
+    let inner_height = image.height.saturating_sub(2 * border_height);
+    let total_area = image.width as usize * image.height as usize;
+    let inner_area = inner_width as usize * inner_height as usize;
+    let border_area = total_area.saturating_sub(inner_area);
+
+    let mut pixels = Vec::with_capacity(border_area);
+
+    let right_edge = image.width.saturating_sub(border_width);
+    let bottom_edge = image.height.saturating_sub(border_height);
+
+    for y in 0..image.height {
+        let is_vertical_border = y < border_height || y >= bottom_edge;
+
+        for x in 0..image.width {
+            let is_horizontal_border = x < border_width || x >= right_edge;
+
+            // Include pixel if it's in the border region
+            if is_vertical_border || is_horizontal_border {
+                let idx = ((y * image.width + x) * 3) as usize;
+                if idx + 2 < image.data.len() {
+                    pixels.push([
+                        image.data[idx],
+                        image.data[idx + 1],
+                        image.data[idx + 2],
+                    ]);
+                }
+            }
+        }
+    }
+
+    pixels
+}
+
+/// Estimate film base by sampling the outer border of the image
+///
+/// This method:
+/// 1. Extracts all pixels from the outer border_percent of the image
+/// 2. Finds the brightest N% of those pixels
+/// 3. Computes per-channel medians from those brightest pixels
+///
+/// This is useful for full-frame scans that include the film rebate area,
+/// where the unexposed film base is visible around the edges.
+fn estimate_base_from_border(
+    image: &DecodedImage,
+    border_percent: f32,
+) -> Result<BaseEstimation, String> {
+    let sample_fraction = base_sample_fraction();
+
+    eprintln!(
+        "[BASE] Using border method: sampling outer {:.1}% of image",
+        border_percent
+    );
+
+    let border_pixels = extract_border_pixels(image, border_percent);
+
+    if border_pixels.is_empty() {
+        return Err("Border region contains no pixels".to_string());
+    }
+
+    eprintln!("[BASE] Extracted {} border pixels", border_pixels.len());
+
+    let (num_brightest, percentage, medians, noise_stats) =
+        compute_base_stats(&border_pixels, sample_fraction);
+
+    eprintln!(
+        "[BASE] Border | using {} px ({:.1}%) brightest",
+        num_brightest, percentage
+    );
+    eprintln!(
+        "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
+        medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+    );
+
+    // Calculate average brightness for validation
+    let brightness: f32 = border_pixels
+        .iter()
+        .map(|p| 0.5 * p[0] + 0.4 * p[1] + 0.1 * p[2])
+        .sum::<f32>()
+        / border_pixels.len() as f32;
+
+    let (valid, reason) = validate_base_candidate(&medians, &noise_stats, brightness);
+
+    if valid {
+        eprintln!("[BASE]   -> border estimation accepted");
+    } else {
+        eprintln!("[BASE]   -> border estimation has warnings: {}", reason);
+    }
+
+    Ok(BaseEstimation {
+        roi: None, // Border method doesn't use a specific ROI
+        medians,
+        noise_stats: Some(noise_stats),
+        auto_estimated: true,
+    })
 }
 
 /// Compute per-channel medians from the brightest N pixels

@@ -36,6 +36,14 @@ enum Commands {
         #[arg(long, value_name = "X,Y,W,H")]
         roi: Option<String>,
 
+        /// Base estimation method: "regions" (default) or "border"
+        #[arg(long, value_name = "METHOD", default_value = "regions")]
+        base_method: String,
+
+        /// Border percentage for "border" base method (1-25%, default: 5)
+        #[arg(long, value_name = "PERCENT", default_value = "5.0")]
+        border_percent: f32,
+
         /// Export format (tiff16 or dng)
         #[arg(long, value_name = "FORMAT", default_value = "tiff16")]
         export: String,
@@ -247,6 +255,8 @@ fn main() {
             preset,
             scan_profile,
             roi,
+            base_method,
+            border_percent,
             export,
             colorspace,
             threads,
@@ -260,6 +270,8 @@ fn main() {
             preset,
             scan_profile,
             roi,
+            base_method,
+            border_percent,
             export,
             colorspace,
             threads,
@@ -356,6 +368,8 @@ fn cmd_convert(
     preset: Option<PathBuf>,
     _scan_profile: Option<PathBuf>,
     roi: Option<String>,
+    base_method: String,
+    border_percent: f32,
     export: String,
     colorspace: String,
     _threads: Option<usize>,
@@ -383,9 +397,20 @@ fn cmd_convert(
         None
     };
 
+    // Parse base estimation method
+    let method = match base_method.to_lowercase().as_str() {
+        "border" => Some(invers_core::models::BaseEstimationMethod::Border),
+        "regions" | _ => Some(invers_core::models::BaseEstimationMethod::Regions),
+    };
+
     // Estimate or load base
     println!("Estimating film base...");
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect)?;
+    let base_estimation = invers_core::pipeline::estimate_base(
+        &decoded,
+        roi_rect,
+        method,
+        Some(border_percent),
+    )?;
     println!(
         "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
@@ -479,8 +504,8 @@ fn cmd_analyze_base(
         return Err("Either --roi or --auto must be specified".to_string());
     };
 
-    // Estimate base
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect)?;
+    // Estimate base (use default regions method for analyze-base command)
+    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect, None, None)?;
 
     // Print results
     println!("\nFilm Base Estimation:");
@@ -582,7 +607,7 @@ fn cmd_batch(
             let base_estimation = if let Some(ref base) = shared_base {
                 base.clone()
             } else {
-                invers_core::pipeline::estimate_base(&decoded, None)?
+                invers_core::pipeline::estimate_base(&decoded, None, None, None)?
             };
 
             // Build output path using shared utility
@@ -819,7 +844,7 @@ fn cmd_diagnose(
     } else {
         None
     };
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded_original, roi_rect)?;
+    let base_estimation = invers_core::pipeline::estimate_base(&decoded_original, roi_rect, None, None)?;
     println!(
         "   Base RGB: [{:.6}, {:.6}, {:.6}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
