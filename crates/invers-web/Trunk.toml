@@ -1,0 +1,14 @@
+[build]
+# Output directory for built assets
+dist = "dist"
+
+[watch]
+# Files to ignore when watching for changes
+ignore = ["dist"]
+
+[serve]
+# Development server addresses
+addresses = ["127.0.0.1"]
+port = 8080
+# Open browser on serve
+open = false

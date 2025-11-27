@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use invers_cli::{
-    build_convert_options, build_convert_options_full, build_convert_options_with_inversion,
-    determine_output_path, parse_base_rgb, parse_inversion_mode, parse_roi,
+    build_convert_options, build_convert_options_full, determine_output_path, parse_base_rgb,
+    parse_inversion_mode, parse_roi,
 };
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -434,7 +434,10 @@ fn cmd_convert(
             }
         }
         if let Some(gamma) = profile.default_gamma {
-            println!("  Default gamma: [{:.2}, {:.2}, {:.2}]", gamma[0], gamma[1], gamma[2]);
+            println!(
+                "  Default gamma: [{:.2}, {:.2}, {:.2}]",
+                gamma[0], gamma[1], gamma[2]
+            );
         }
         Some(profile)
     } else {
@@ -472,12 +475,8 @@ fn cmd_convert(
 
         // Estimate base
         println!("Estimating film base...");
-        let estimation = invers_core::pipeline::estimate_base(
-            &decoded,
-            roi_rect,
-            method,
-            Some(border_percent),
-        )?;
+        let estimation =
+            invers_core::pipeline::estimate_base(&decoded, roi_rect, method, Some(border_percent))?;
         println!(
             "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
             estimation.medians[0], estimation.medians[1], estimation.medians[2]
@@ -930,7 +929,8 @@ fn cmd_diagnose(
     } else {
         None
     };
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded_original, roi_rect, None, None)?;
+    let base_estimation =
+        invers_core::pipeline::estimate_base(&decoded_original, roi_rect, None, None)?;
     println!(
         "   Base RGB: [{:.6}, {:.6}, {:.6}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]

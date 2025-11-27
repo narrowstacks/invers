@@ -3,17 +3,25 @@
 //! Provides tools for testing different parameter combinations to optimize
 //! conversion results against reference images.
 
+#[cfg(feature = "native")]
 use crate::config;
+#[cfg(feature = "native")]
 use crate::decoders::decode_image;
+#[cfg(feature = "native")]
 use crate::diagnostics::{compare_conversions, DiagnosticReport};
 use crate::models::{
     BaseSamplingMode, ConvertOptions, InversionMode, OutputFormat, ShadowLiftMode,
 };
+#[cfg(feature = "native")]
 use crate::pipeline::{estimate_base, process_image};
+#[cfg(feature = "native")]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "native")]
 use std::path::Path;
+#[cfg(feature = "native")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "native")]
 use std::sync::Arc;
 
 /// Parameter set for testing
@@ -56,6 +64,7 @@ pub struct ParameterTest {
     pub exposure_compensation: f32,
 }
 
+#[cfg(feature = "native")]
 impl Default for ParameterTest {
     fn default() -> Self {
         let handle = config::pipeline_config_handle();
@@ -69,6 +78,34 @@ impl Default for ParameterTest {
         let mut defaults = config::ParameterTestDefaults::default();
         defaults.sanitize();
         defaults.into()
+    }
+}
+
+#[cfg(not(feature = "native"))]
+impl Default for ParameterTest {
+    fn default() -> Self {
+        Self {
+            enable_auto_levels: true,
+            clip_percent: 0.25,
+            enable_auto_color: true,
+            auto_color_strength: 0.6,
+            auto_color_min_gain: 0.7,
+            auto_color_max_gain: 1.3,
+            base_brightest_percent: 5.0,
+            base_sampling_mode: BaseSamplingMode::Median,
+            inversion_mode: InversionMode::Linear,
+            shadow_lift_mode: ShadowLiftMode::Percentile,
+            shadow_lift_value: 0.02,
+            highlight_compression: 1.0,
+            enable_auto_exposure: true,
+            auto_exposure_target_median: 0.25,
+            auto_exposure_strength: 1.0,
+            auto_exposure_min_gain: 0.6,
+            auto_exposure_max_gain: 1.4,
+            tone_curve_strength: 0.5,
+            skip_tone_curve: false,
+            exposure_compensation: 1.0,
+        }
     }
 }
 
@@ -104,6 +141,7 @@ pub struct ParameterGrid {
     pub exposure_compensation: Vec<f32>,
 }
 
+#[cfg(feature = "native")]
 impl Default for ParameterGrid {
     fn default() -> Self {
         let handle = config::pipeline_config_handle();
@@ -117,6 +155,28 @@ impl Default for ParameterGrid {
     }
 }
 
+#[cfg(not(feature = "native"))]
+impl Default for ParameterGrid {
+    fn default() -> Self {
+        Self {
+            auto_levels: vec![true],
+            clip_percent: vec![0.25, 0.5, 1.0],
+            auto_color: vec![true, false],
+            auto_color_strength: vec![0.6, 0.8],
+            auto_color_min_gain: vec![0.7, 0.8],
+            auto_color_max_gain: vec![1.2, 1.3],
+            base_brightest_percent: vec![5.0, 10.0, 15.0],
+            base_sampling_mode: vec![BaseSamplingMode::Median],
+            inversion_mode: vec![InversionMode::Linear],
+            shadow_lift_mode: vec![ShadowLiftMode::Percentile],
+            shadow_lift_value: vec![0.02],
+            tone_curve_strength: vec![0.4, 0.5, 0.6, 0.7],
+            exposure_compensation: vec![1.0],
+        }
+    }
+}
+
+#[cfg(feature = "native")]
 impl ParameterGrid {
     /// Create a minimal grid for quick testing (12 combinations)
     pub fn minimal() -> Self {
@@ -144,6 +204,7 @@ impl ParameterGrid {
 }
 
 /// Run a single parameter test
+#[cfg(feature = "native")]
 pub fn run_parameter_test<P: AsRef<Path>>(
     original_path: P,
     reference_path: P,
@@ -224,6 +285,7 @@ pub fn run_parameter_test<P: AsRef<Path>>(
 }
 
 /// Calculate contrast ratio from diagnostic report
+#[cfg(feature = "native")]
 fn calculate_contrast_ratio(report: &DiagnosticReport) -> f32 {
     let our_contrast = report.our_stats.iter().map(|s| s.max - s.min).sum::<f32>() / 3.0;
     let tp_contrast = report
@@ -240,6 +302,7 @@ fn calculate_contrast_ratio(report: &DiagnosticReport) -> f32 {
     }
 }
 
+#[cfg(feature = "native")]
 impl From<config::ParameterTestDefaults> for ParameterTest {
     fn from(defaults: config::ParameterTestDefaults) -> Self {
         Self {
@@ -267,6 +330,7 @@ impl From<config::ParameterTestDefaults> for ParameterTest {
     }
 }
 
+#[cfg(feature = "native")]
 impl From<config::TestingGridValues> for ParameterGrid {
     fn from(values: config::TestingGridValues) -> Self {
         Self {
@@ -289,6 +353,7 @@ impl From<config::TestingGridValues> for ParameterGrid {
 
 /// Calculate overall score from diagnostic report
 /// Lower scores are better (closer to reference)
+#[cfg(feature = "native")]
 fn calculate_score(report: &DiagnosticReport) -> f32 {
     // Weight different metrics
     let mae_weight = 1.0;
@@ -323,6 +388,7 @@ fn calculate_score(report: &DiagnosticReport) -> f32 {
 }
 
 /// Run parameter grid search
+#[cfg(feature = "native")]
 pub fn run_parameter_grid_search<P: AsRef<Path>>(
     original_path: P,
     reference_path: P,
@@ -449,6 +515,7 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
 }
 
 /// Print test result summary
+#[cfg(feature = "native")]
 pub fn print_test_result(result: &TestResult, rank: usize) {
     println!("\n{:=<80}", "");
     println!(
@@ -543,6 +610,7 @@ pub fn print_test_result(result: &TestResult, rank: usize) {
 
 /// Run parameter grid search in parallel using Rayon
 /// Much faster than sequential search, especially for large grids
+#[cfg(feature = "native")]
 pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
     original_path: P,
     reference_path: P,
@@ -690,6 +758,7 @@ pub fn run_parameter_grid_search_parallel<P: AsRef<Path>>(
 
 /// Adaptive grid search - starts coarse, refines around best results
 /// More efficient than exhaustive search for finding optimal parameters
+#[cfg(feature = "native")]
 pub fn run_adaptive_grid_search<P: AsRef<Path>>(
     original_path: P,
     reference_path: P,

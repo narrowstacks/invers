@@ -2,9 +2,9 @@
 //!
 //! Core pipeline for negative-to-positive conversion.
 
-use crate::config;
 use crate::decoders::DecodedImage;
 use crate::models::{BaseEstimation, BaseEstimationMethod, ConvertOptions};
+#[cfg(feature = "native")]
 use rayon::prelude::*;
 
 /// Prevent values from ever hitting absolute black/white while retaining full range.
@@ -17,6 +17,7 @@ const BASE_VALIDATION_MIN_BRIGHTNESS: f32 = 0.25;
 const BASE_VALIDATION_MAX_NOISE: f32 = 0.15;
 
 /// Result of the processing pipeline
+#[derive(Debug, Clone)]
 pub struct ProcessedImage {
     /// Image width
     pub width: u32,
@@ -591,10 +592,17 @@ impl BaseRoiCandidate {
     }
 }
 
+#[cfg(feature = "native")]
 fn base_sample_fraction() -> f32 {
-    let defaults = &config::pipeline_config_handle().config.defaults;
+    let defaults = &crate::config::pipeline_config_handle().config.defaults;
     let fraction = defaults.base_brightest_percent / 100.0;
     fraction.clamp(MIN_BASE_SAMPLE_FRACTION, MAX_BASE_SAMPLE_FRACTION)
+}
+
+#[cfg(not(feature = "native"))]
+fn base_sample_fraction() -> f32 {
+    // Default value for WASM builds (5.0% -> 0.05)
+    0.05_f32.clamp(MIN_BASE_SAMPLE_FRACTION, MAX_BASE_SAMPLE_FRACTION)
 }
 
 fn compute_base_stats(roi_pixels: &[[f32; 3]], fraction: f32) -> (usize, f32, [f32; 3], [f32; 3]) {
@@ -1345,7 +1353,7 @@ pub fn apply_tone_curve(data: &mut [f32], curve_params: &crate::models::ToneCurv
 /// Apply S-curve tone mapping for natural film-like contrast
 /// Strength: 0.0 = no curve (linear), 1.0 = maximum curve
 ///
-/// Uses parallel processing for large images (>100k values)
+/// Uses parallel processing for large images (>100k values) when native feature is enabled.
 fn apply_s_curve(data: &mut [f32], strength: f32) {
     // Clamp strength to valid range
     let strength = strength.clamp(0.0, 1.0);
@@ -1355,21 +1363,25 @@ fn apply_s_curve(data: &mut [f32], strength: f32) {
         return;
     }
 
-    const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
+    #[cfg(feature = "native")]
+    {
+        const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
 
-    if data.len() >= PARALLEL_THRESHOLD {
-        // Parallel processing for large images
-        const CHUNK_SIZE: usize = 256 * 3;
-        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
-            for value in chunk.iter_mut() {
-                *value = apply_s_curve_point(*value, strength);
-            }
-        });
-    } else {
-        // Sequential for small images
-        for value in data.iter_mut() {
-            *value = apply_s_curve_point(*value, strength);
+        if data.len() >= PARALLEL_THRESHOLD {
+            // Parallel processing for large images
+            const CHUNK_SIZE: usize = 256 * 3;
+            data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+                for value in chunk.iter_mut() {
+                    *value = apply_s_curve_point(*value, strength);
+                }
+            });
+            return;
         }
+    }
+
+    // Sequential processing (WASM or small images)
+    for value in data.iter_mut() {
+        *value = apply_s_curve_point(*value, strength);
     }
 }
 
@@ -1417,7 +1429,7 @@ fn apply_s_curve_point(x: f32, strength: f32) -> f32 {
 /// The result is more film-like than symmetric S-curves because real film
 /// has different response characteristics in shadows vs highlights.
 ///
-/// Uses parallel processing for large images (>100k values)
+/// Uses parallel processing for large images (>100k values) when native feature is enabled.
 fn apply_asymmetric_curve(data: &mut [f32], params: &crate::models::ToneCurveParams) {
     let strength = params.strength.clamp(0.0, 1.0);
 
@@ -1431,35 +1443,39 @@ fn apply_asymmetric_curve(data: &mut [f32], params: &crate::models::ToneCurvePar
     let toe_length = params.toe_length.clamp(0.05, 0.45);
     let shoulder_start = params.shoulder_start.clamp(0.55, 0.95);
 
-    const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
+    #[cfg(feature = "native")]
+    {
+        const PARALLEL_THRESHOLD: usize = 300_000; // 100k pixels * 3 channels
 
-    if data.len() >= PARALLEL_THRESHOLD {
-        // Parallel processing for large images
-        const CHUNK_SIZE: usize = 256 * 3;
-        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
-            for value in chunk.iter_mut() {
-                let curved = apply_asymmetric_curve_point(
-                    *value,
-                    toe_strength,
-                    shoulder_strength,
-                    toe_length,
-                    shoulder_start,
-                );
-                *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
-            }
-        });
-    } else {
-        // Sequential for small images
-        for value in data.iter_mut() {
-            let curved = apply_asymmetric_curve_point(
-                *value,
-                toe_strength,
-                shoulder_strength,
-                toe_length,
-                shoulder_start,
-            );
-            *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
+        if data.len() >= PARALLEL_THRESHOLD {
+            // Parallel processing for large images
+            const CHUNK_SIZE: usize = 256 * 3;
+            data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+                for value in chunk.iter_mut() {
+                    let curved = apply_asymmetric_curve_point(
+                        *value,
+                        toe_strength,
+                        shoulder_strength,
+                        toe_length,
+                        shoulder_start,
+                    );
+                    *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
+                }
+            });
+            return;
         }
+    }
+
+    // Sequential processing (WASM or small images)
+    for value in data.iter_mut() {
+        let curved = apply_asymmetric_curve_point(
+            *value,
+            toe_strength,
+            shoulder_strength,
+            toe_length,
+            shoulder_start,
+        );
+        *value = clamp_to_working_range(*value * (1.0 - strength) + curved * strength);
     }
 }
 
@@ -1509,29 +1525,33 @@ fn apply_asymmetric_curve_point(
 /// Apply color correction matrix
 /// Performs 3x3 matrix multiplication on RGB pixels
 ///
-/// Uses parallel processing for large images (>100k pixels)
+/// Uses parallel processing for large images (>100k pixels) when native feature is enabled.
 pub fn apply_color_matrix(data: &mut [f32], matrix: &[[f32; 3]; 3], channels: u8) {
     if channels != 3 {
         return; // Only works for RGB
     }
 
-    let num_pixels = data.len() / 3;
-    const PARALLEL_THRESHOLD: usize = 100_000; // Use parallelism for >100k pixels
+    #[cfg(feature = "native")]
+    {
+        let num_pixels = data.len() / 3;
+        const PARALLEL_THRESHOLD: usize = 100_000; // Use parallelism for >100k pixels
 
-    if num_pixels >= PARALLEL_THRESHOLD {
-        // Parallel processing for large images
-        // Process in chunks of 256 pixels (768 f32s) for good cache locality
-        const CHUNK_SIZE: usize = 256 * 3;
-        data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
-            for pixel in chunk.chunks_exact_mut(3) {
-                apply_color_matrix_to_pixel(pixel, matrix);
-            }
-        });
-    } else {
-        // Sequential processing for small images
-        for pixel in data.chunks_exact_mut(3) {
-            apply_color_matrix_to_pixel(pixel, matrix);
+        if num_pixels >= PARALLEL_THRESHOLD {
+            // Parallel processing for large images
+            // Process in chunks of 256 pixels (768 f32s) for good cache locality
+            const CHUNK_SIZE: usize = 256 * 3;
+            data.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
+                for pixel in chunk.chunks_exact_mut(3) {
+                    apply_color_matrix_to_pixel(pixel, matrix);
+                }
+            });
+            return;
         }
+    }
+
+    // Sequential processing (WASM or small images)
+    for pixel in data.chunks_exact_mut(3) {
+        apply_color_matrix_to_pixel(pixel, matrix);
     }
 }
 

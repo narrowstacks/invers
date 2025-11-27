@@ -1,0 +1,54 @@
+[package]
+name = "invers-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Browser-based GUI for film negative conversion using WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+invers-core = { path = "../invers-core", default-features = false, features = ["wasm"] }
+
+# Sycamore reactive web framework
+sycamore = "0.9"
+
+# WASM bindings
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlCanvasElement",
+    "HtmlAnchorElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "File",
+    "FileList",
+    "FileReader",
+    "Blob",
+    "Url",
+    "DragEvent",
+    "DataTransfer",
+    "Event",
+    "MouseEvent",
+    "ProgressEvent",
+] }
+js-sys = "0.3"
+
+# Error handling and logging
+console_error_panic_hook = "0.1"
+log = "0.4"
+console_log = { version = "1", features = ["color"] }
+
+# For embedded presets
+once_cell = "1.19"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

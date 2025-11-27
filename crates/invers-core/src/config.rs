@@ -1,7 +1,9 @@
 use crate::models::{BaseSamplingMode, InversionMode, ShadowLiftMode};
 use serde::Deserialize;
+#[cfg(feature = "native")]
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "native")]
 use std::sync::{Once, OnceLock};
 
 /// Canonical list of candidate config file names we search for on disk.
@@ -360,6 +362,7 @@ impl Default for TestingGridValues {
 }
 
 /// Load configuration from disk, optionally forcing a specific path.
+#[cfg(feature = "native")]
 pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle {
     let mut warnings = Vec::new();
     let mut candidates = Vec::new();
@@ -415,15 +418,35 @@ pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle 
     PipelineConfigHandle::with_config(PipelineConfig::default(), None, warnings)
 }
 
+/// Load configuration (WASM version - always returns defaults)
+#[cfg(not(feature = "native"))]
+pub fn load_pipeline_config(_custom_path: Option<&Path>) -> PipelineConfigHandle {
+    PipelineConfigHandle::with_config(
+        PipelineConfig::default(),
+        None,
+        vec!["WASM build: using built-in defaults.".to_string()],
+    )
+}
+
+#[cfg(feature = "native")]
 static PIPELINE_CONFIG_HANDLE: OnceLock<PipelineConfigHandle> = OnceLock::new();
+#[cfg(feature = "native")]
 static PRINT_CONFIG_ONCE: Once = Once::new();
 
 /// Access the global pipeline configuration (loaded once per process).
+#[cfg(feature = "native")]
 pub fn pipeline_config_handle() -> &'static PipelineConfigHandle {
     PIPELINE_CONFIG_HANDLE.get_or_init(|| load_pipeline_config(None))
 }
 
+/// Access pipeline configuration (WASM version - returns fresh defaults each call).
+#[cfg(not(feature = "native"))]
+pub fn pipeline_config_handle() -> PipelineConfigHandle {
+    load_pipeline_config(None)
+}
+
 /// Print config source and warnings the first time it is requested.
+#[cfg(feature = "native")]
 pub fn log_config_usage() {
     PRINT_CONFIG_ONCE.call_once(|| {
         let handle = pipeline_config_handle();
@@ -437,4 +460,10 @@ pub fn log_config_usage() {
             eprintln!("[invers] Config warning: {}", warning);
         }
     });
+}
+
+/// Print config source and warnings (WASM version - no-op).
+#[cfg(not(feature = "native"))]
+pub fn log_config_usage() {
+    // No-op in WASM - logging handled differently
 }

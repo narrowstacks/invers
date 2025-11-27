@@ -3,6 +3,7 @@ members = [
     "crates/invers-core",
     "crates/invers-cli",
     "crates/invers-gui",
+    "crates/invers-web",
 ]
 resolver = "2"
 

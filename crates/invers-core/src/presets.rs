@@ -5,13 +5,29 @@
 use crate::models::{FilmPreset, ScanProfile};
 use std::path::Path;
 
+/// Load a film preset from a YAML string
+///
+/// This function is useful for WASM environments where presets
+/// are embedded at compile time.
+pub fn load_film_preset_from_str(yaml: &str) -> Result<FilmPreset, String> {
+    serde_yaml::from_str(yaml).map_err(|e| format!("Failed to parse preset YAML: {}", e))
+}
+
+/// Load a scan profile from a YAML string
+///
+/// This function is useful for WASM environments where profiles
+/// are embedded at compile time.
+pub fn load_scan_profile_from_str(yaml: &str) -> Result<ScanProfile, String> {
+    serde_yaml::from_str(yaml).map_err(|e| format!("Failed to parse profile YAML: {}", e))
+}
+
 /// Load a film preset from a YAML file
 pub fn load_film_preset<P: AsRef<Path>>(path: P) -> Result<FilmPreset, String> {
     let path = path.as_ref();
     let contents =
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read preset file: {}", e))?;
 
-    serde_yaml::from_str(&contents).map_err(|e| format!("Failed to parse preset YAML: {}", e))
+    load_film_preset_from_str(&contents)
 }
 
 /// Save a film preset to a YAML file
@@ -29,7 +45,7 @@ pub fn load_scan_profile<P: AsRef<Path>>(path: P) -> Result<ScanProfile, String>
     let contents =
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read profile file: {}", e))?;
 
-    serde_yaml::from_str(&contents).map_err(|e| format!("Failed to parse profile YAML: {}", e))
+    load_scan_profile_from_str(&contents)
 }
 
 /// Save a scan profile to a YAML file
@@ -66,6 +82,7 @@ pub fn list_film_presets<P: AsRef<Path>>(dir: P) -> Result<Vec<String>, String> 
 }
 
 /// Get the default presets directory
+#[cfg(feature = "native")]
 pub fn get_presets_dir() -> Result<std::path::PathBuf, String> {
     let config_dir =
         dirs::config_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
@@ -79,4 +96,10 @@ pub fn get_presets_dir() -> Result<std::path::PathBuf, String> {
     }
 
     Ok(presets_dir)
+}
+
+/// Get the default presets directory (WASM version - not available)
+#[cfg(not(feature = "native"))]
+pub fn get_presets_dir() -> Result<std::path::PathBuf, String> {
+    Err("Presets directory not available in WASM build".to_string())
 }

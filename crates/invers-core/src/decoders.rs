@@ -2,6 +2,7 @@
 //!
 //! Support for RAW, TIFF, and PNG file formats.
 
+use std::io::Cursor;
 use std::path::Path;
 
 /// Decoded image data
@@ -45,6 +46,167 @@ pub fn decode_image<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
         // "cr2" | "cr3" | "nef" | "arw" => decode_raw(path),
         _ => Err(format!("Unsupported file format: {}", extension)),
     }
+}
+
+/// Supported image formats for buffer-based decoding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    Tiff,
+    Png,
+}
+
+impl ImageFormat {
+    /// Detect format from file extension
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "tif" | "tiff" => Some(ImageFormat::Tiff),
+            "png" => Some(ImageFormat::Png),
+            _ => None,
+        }
+    }
+
+    /// Detect format from filename
+    pub fn from_filename(filename: &str) -> Option<Self> {
+        let ext = filename.rsplit('.').next()?;
+        Self::from_extension(ext)
+    }
+}
+
+/// Decode an image from an in-memory buffer
+///
+/// This function supports decoding from byte arrays, useful for WASM environments
+/// where file system access is not available.
+pub fn decode_image_from_bytes(data: &[u8], format: ImageFormat) -> Result<DecodedImage, String> {
+    match format {
+        ImageFormat::Tiff => decode_tiff_from_bytes(data),
+        ImageFormat::Png => decode_png_from_bytes(data),
+    }
+}
+
+/// Decode a TIFF from an in-memory buffer
+fn decode_tiff_from_bytes(data: &[u8]) -> Result<DecodedImage, String> {
+    let cursor = Cursor::new(data);
+    let mut decoder = tiff::decoder::Decoder::new(cursor)
+        .map_err(|e| format!("Failed to create TIFF decoder: {}", e))?;
+
+    // Get image dimensions
+    let (width, height) = decoder
+        .dimensions()
+        .map_err(|e| format!("Failed to get TIFF dimensions: {}", e))?;
+
+    // Get color type
+    let color_type = decoder
+        .colortype()
+        .map_err(|e| format!("Failed to get TIFF color type: {}", e))?;
+
+    // Read the image data
+    let image_data = decoder
+        .read_image()
+        .map_err(|e| format!("Failed to read TIFF image data: {}", e))?;
+
+    // Convert to f32 linear RGB based on bit depth and color type
+    let (data, channels) = match image_data {
+        tiff::decoder::DecodingResult::U8(buf) => decode_tiff_u8(&buf, width, height, color_type)?,
+        tiff::decoder::DecodingResult::U16(buf) => {
+            decode_tiff_u16(&buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::U32(buf) => {
+            decode_tiff_u32(&buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::U64(buf) => {
+            decode_tiff_u64(&buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::F32(buf) => {
+            decode_tiff_f32(&buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::F64(buf) => {
+            decode_tiff_f64(&buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::F16(buf) => {
+            // Convert f16 to f32
+            let f32_buf: Vec<f32> = buf.iter().map(|&v| v.to_f32()).collect();
+            decode_tiff_f32(&f32_buf, width, height, color_type)?
+        }
+        tiff::decoder::DecodingResult::I8(_)
+        | tiff::decoder::DecodingResult::I16(_)
+        | tiff::decoder::DecodingResult::I32(_)
+        | tiff::decoder::DecodingResult::I64(_) => {
+            return Err("Signed integer TIFF formats not supported".to_string());
+        }
+    };
+
+    Ok(DecodedImage {
+        width,
+        height,
+        data,
+        channels,
+        black_level: None,
+        white_level: None,
+        color_matrix: None,
+    })
+}
+
+/// Decode a PNG from an in-memory buffer
+fn decode_png_from_bytes(data: &[u8]) -> Result<DecodedImage, String> {
+    let cursor = Cursor::new(data);
+    let decoder = png::Decoder::new(cursor);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("Failed to read PNG info: {}", e))?;
+
+    let info = reader.info();
+    let width = info.width;
+    let height = info.height;
+    let color_type = info.color_type;
+    let bit_depth = info.bit_depth;
+
+    // Allocate buffer for image data
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| "Failed to determine PNG buffer size".to_string())?;
+    let mut buf = vec![0u8; buffer_size];
+    let frame_info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("Failed to read PNG frame: {}", e))?;
+
+    // Get the actual bytes used
+    let bytes = &buf[..frame_info.buffer_size()];
+
+    // Convert to f32 linear RGB
+    let (data, channels) = match (color_type, bit_depth) {
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => {
+            decode_png_gray8(bytes, width, height)?
+        }
+        (png::ColorType::Grayscale, png::BitDepth::Sixteen) => {
+            decode_png_gray16(bytes, width, height)?
+        }
+        (png::ColorType::Rgb, png::BitDepth::Eight) => decode_png_rgb8(bytes, width, height)?,
+        (png::ColorType::Rgb, png::BitDepth::Sixteen) => decode_png_rgb16(bytes, width, height)?,
+        (png::ColorType::Rgba, png::BitDepth::Eight) => decode_png_rgba8(bytes, width, height)?,
+        (png::ColorType::Rgba, png::BitDepth::Sixteen) => decode_png_rgba16(bytes, width, height)?,
+        (png::ColorType::GrayscaleAlpha, _) => {
+            return Err("Grayscale+Alpha PNG not yet supported".to_string());
+        }
+        (png::ColorType::Indexed, _) => {
+            return Err("Indexed PNG not supported".to_string());
+        }
+        _ => {
+            return Err(format!(
+                "Unsupported PNG format: {:?} with bit depth {:?}",
+                color_type, bit_depth
+            ));
+        }
+    };
+
+    Ok(DecodedImage {
+        width,
+        height,
+        data,
+        channels,
+        black_level: None,
+        white_level: None,
+        color_matrix: None,
+    })
 }
 
 /// Decode a TIFF file

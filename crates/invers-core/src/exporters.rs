@@ -3,6 +3,7 @@
 //! Export processed images to TIFF, DNG, and other formats.
 
 use crate::pipeline::ProcessedImage;
+use std::io::Cursor;
 use std::path::Path;
 
 /// Export a processed image to TIFF format
@@ -60,6 +61,59 @@ pub fn export_tiff16<P: AsRef<Path>>(
     let _ = icc_profile;
 
     Ok(())
+}
+
+/// Export a processed image to TIFF format in-memory
+///
+/// This function exports to a byte buffer, useful for WASM environments
+/// where file system access is not available.
+///
+/// Note: This exports the image data as-is (typically linear light).
+/// The image data should have already gone through the full processing pipeline
+/// including tone curves, color matrices, and exposure adjustments.
+pub fn export_tiff16_to_bytes(
+    image: &ProcessedImage,
+    icc_profile: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    if image.channels != 3 {
+        return Err(format!(
+            "TIFF export only supports 3-channel RGB, got {} channels",
+            image.channels
+        ));
+    }
+
+    // Convert f32 (0.0-1.0) to u16 (0-65535)
+    // This is a simple linear scaling - the data should already be
+    // in the correct colorspace and tone-mapped by the pipeline
+    let u16_data: Vec<u16> = image
+        .data
+        .iter()
+        .map(|&v| {
+            let clamped = v.clamp(0.0, 1.0);
+            (clamped * 65535.0).round() as u16
+        })
+        .collect();
+
+    // Create in-memory buffer
+    let mut buffer = Cursor::new(Vec::new());
+
+    // Create TIFF encoder
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut buffer)
+            .map_err(|e| format!("Failed to create TIFF encoder: {}", e))?;
+
+        // Write the image as 16-bit RGB
+        encoder
+            .write_image::<tiff::encoder::colortype::RGB16>(image.width, image.height, &u16_data)
+            .map_err(|e| format!("Failed to write TIFF image: {}", e))?;
+    }
+
+    // TODO: Embed ICC profile if provided
+    // The tiff crate doesn't currently expose easy ICC profile embedding
+    // This would require writing custom TIFF tags
+    let _ = icc_profile;
+
+    Ok(buffer.into_inner())
 }
 
 /// Export a processed image to Linear DNG format
