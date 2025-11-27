@@ -18,7 +18,11 @@
       "Bash(cargo clean:*)",
       "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers convert:*)",
       "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers batch:*)",
-      "Bash(gh release:*)"
+      "Bash(gh release:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo run:*)",
+      "Bash(time ./target/release/invers convert:*)",
+      "Bash(magick compare:*)"
     ],
     "deny": [],
     "ask": []

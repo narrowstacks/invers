@@ -41,10 +41,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libvulkan-dev
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p invers-cli
+      - name: Build release binary with GPU support
+        run: cargo build --release --target ${{ matrix.target }} -p invers-cli --features gpu
 
       - name: Create archive (Unix)
         shell: bash

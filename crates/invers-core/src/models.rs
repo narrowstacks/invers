@@ -454,6 +454,10 @@ pub struct ConvertOptions {
     /// Enable auto white balance correction
     #[serde(default = "default_false")]
     pub enable_auto_wb: bool,
+
+    /// Use GPU acceleration (requires "gpu" feature)
+    #[serde(default = "default_true")]
+    pub use_gpu: bool,
 }
 
 // Default value functions for serde

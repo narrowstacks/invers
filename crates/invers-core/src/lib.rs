@@ -13,6 +13,14 @@ pub mod pipeline;
 pub mod presets;
 pub mod testing;
 
+// GPU acceleration module (optional, enabled with "gpu" feature)
+#[cfg(feature = "gpu")]
+pub mod gpu;
+
 // Re-export commonly used types
 pub use color::{Hsl, Lab};
 pub use models::{BaseEstimation, ConvertOptions, FilmPreset, HslAdjustments, ScanProfile};
+
+// Re-export GPU functions when available
+#[cfg(feature = "gpu")]
+pub use gpu::{is_gpu_available, gpu_info, process_image_gpu};

@@ -370,6 +370,7 @@ impl InversApp {
             auto_exposure_max_gain: defaults.auto_exposure_max_gain,
             no_clip: false,
             enable_auto_wb: false,
+            use_gpu: true, // Enable GPU acceleration for preview
         };
 
         // Process the image
@@ -478,6 +479,7 @@ impl InversApp {
             auto_exposure_max_gain: defaults.auto_exposure_max_gain,
             no_clip: false,
             enable_auto_wb: false,
+            use_gpu: true, // Enable GPU acceleration for export
         };
 
         // Process the original full-resolution image

@@ -12,6 +12,10 @@ description = "CLI for invers - film negative to positive conversion tool"
 name = "invers"
 path = "src/main.rs"
 
+[features]
+default = []
+gpu = ["invers-core/gpu"]
+
 [dependencies]
 clap = { version = "4.5.48", features = ["derive"] }
 invers-core = { path = "../invers-core" }

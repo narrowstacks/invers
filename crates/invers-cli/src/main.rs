@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use invers_cli::{
-    build_convert_options, build_convert_options_full, determine_output_path, parse_base_rgb,
-    parse_inversion_mode, parse_roi,
+    build_convert_options, build_convert_options_full_with_gpu, determine_output_path,
+    parse_base_rgb, parse_inversion_mode, parse_roi,
 };
 use rayon::prelude::*;
 use serde::Serialize;
@@ -65,6 +65,10 @@ enum Commands {
         /// Suppress non-essential output (timing, progress messages)
         #[arg(long)]
         silent: bool,
+
+        /// Force CPU-only processing (GPU is used by default when available)
+        #[arg(long)]
+        cpu: bool,
     },
 
     /// Analyze image and estimate film base color
@@ -134,6 +138,10 @@ enum Commands {
         /// Enable verbose output (base estimation details, config loading)
         #[arg(short, long)]
         verbose: bool,
+
+        /// Force CPU-only processing (GPU is used by default when available)
+        #[arg(long)]
+        cpu: bool,
     },
 
     /// Manage film presets
@@ -279,6 +287,7 @@ fn main() {
             inversion,
             base,
             silent,
+            cpu,
         } => cmd_convert(
             input,
             out,
@@ -291,6 +300,7 @@ fn main() {
             inversion,
             base,
             silent,
+            cpu,
         ),
 
         Commands::Analyze {
@@ -312,7 +322,8 @@ fn main() {
             threads,
             silent,
             verbose,
-        } => cmd_batch(inputs, base_from, preset, export, out, threads, silent, verbose),
+            cpu,
+        } => cmd_batch(inputs, base_from, preset, export, out, threads, silent, verbose, cpu),
 
         Commands::Preset { action } => match action {
             PresetAction::List { dir } => cmd_preset_list(dir),
@@ -391,6 +402,7 @@ fn cmd_convert(
     inversion: Option<String>,
     base: Option<String>,
     silent: bool,
+    cpu_only: bool,
 ) -> Result<(), String> {
     let start_time = Instant::now();
 
@@ -501,8 +513,11 @@ fn cmd_convert(
         }
     }
 
+    // GPU is enabled by default, --cpu forces CPU-only processing
+    let use_gpu = !cpu_only;
+
     // Build conversion options using shared utility (with sensible defaults)
-    let options = build_convert_options_full(
+    let options = build_convert_options_full_with_gpu(
         input.clone(),
         output_dir,
         &export,
@@ -519,6 +534,7 @@ fn cmd_convert(
         false, // no_clip - use default
         false, // auto_wb - disabled by default
         false, // debug - disabled
+        use_gpu,
     )?;
 
     // Process image
@@ -783,6 +799,7 @@ fn cmd_batch(
     threads: Option<usize>,
     silent: bool,
     verbose: bool,
+    cpu_only: bool,
 ) -> Result<(), String> {
     let batch_start = Instant::now();
 
@@ -874,18 +891,28 @@ fn cmd_batch(
                 .unwrap_or(std::path::Path::new("."))
                 .to_path_buf();
 
+            // GPU is enabled by default, --cpu forces CPU-only processing
+            let use_gpu = !cpu_only;
+
             // Build conversion options using shared utility
-            let options = build_convert_options(
+            let options = build_convert_options_full_with_gpu(
                 input.clone(),
                 output_dir_for_options,
                 &export,
                 "linear-rec2020".to_string(),
                 Some(base_estimation),
                 film_preset.clone(),
-                false,
-                false,
-                1.0,
-                false,
+                None, // scan_profile
+                false, // no_tonecurve
+                false, // no_colormatrix
+                1.0,   // exposure
+                None,  // inversion_mode
+                false, // no_auto_levels
+                false, // preserve_headroom
+                false, // no_clip
+                false, // auto_wb
+                false, // debug
+                use_gpu,
             )?;
 
             // Process image

@@ -8,6 +8,9 @@ use crate::models::{BaseEstimation, BaseEstimationMethod, ConvertOptions};
 use crate::verbose_println;
 use rayon::prelude::*;
 
+#[cfg(feature = "gpu")]
+use crate::gpu;
+
 /// Prevent values from ever hitting absolute black/white while retaining full range.
 const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
 const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
@@ -37,6 +40,30 @@ pub fn process_image(
     image: DecodedImage,
     options: &ConvertOptions,
 ) -> Result<ProcessedImage, String> {
+    // Try GPU path if enabled and available
+    #[cfg(feature = "gpu")]
+    if options.use_gpu && gpu::is_gpu_available() {
+        if options.debug {
+            if let Some(info) = gpu::gpu_info() {
+                eprintln!("[DEBUG] Using GPU acceleration: {}", info);
+            }
+        }
+
+        match gpu::process_image_gpu(&image, options) {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                // Fall back to CPU on GPU error
+                eprintln!("[WARN] GPU processing failed, falling back to CPU: {}", e);
+            }
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    if options.use_gpu && !gpu::is_gpu_available() && options.debug {
+        eprintln!("[DEBUG] GPU requested but not available, using CPU");
+    }
+
+    // CPU path
     // Step 1: Get or compute base estimation
     let base_estimation = match &options.base_estimation {
         Some(base) => base.clone(),

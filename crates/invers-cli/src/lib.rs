@@ -239,6 +239,47 @@ pub fn build_convert_options_full(
     auto_wb: bool,
     debug: bool,
 ) -> Result<invers_core::models::ConvertOptions, String> {
+    build_convert_options_full_with_gpu(
+        input,
+        output_dir,
+        export,
+        colorspace,
+        base_estimation,
+        film_preset,
+        scan_profile,
+        no_tonecurve,
+        no_colormatrix,
+        exposure,
+        inversion_mode,
+        no_auto_levels,
+        preserve_headroom,
+        no_clip,
+        auto_wb,
+        debug,
+        true, // use_gpu: default true (will fallback if unavailable)
+    )
+}
+
+/// Build a ConvertOptions struct with all options including GPU control
+pub fn build_convert_options_full_with_gpu(
+    input: PathBuf,
+    output_dir: PathBuf,
+    export: &str,
+    colorspace: String,
+    base_estimation: Option<invers_core::models::BaseEstimation>,
+    film_preset: Option<invers_core::models::FilmPreset>,
+    scan_profile: Option<invers_core::models::ScanProfile>,
+    no_tonecurve: bool,
+    no_colormatrix: bool,
+    exposure: f32,
+    inversion_mode: Option<invers_core::models::InversionMode>,
+    no_auto_levels: bool,
+    preserve_headroom: bool,
+    no_clip: bool,
+    auto_wb: bool,
+    debug: bool,
+    use_gpu: bool,
+) -> Result<invers_core::models::ConvertOptions, String> {
     let config_handle = invers_core::config::pipeline_config_handle();
     let defaults = config_handle.config.defaults.clone();
 
@@ -291,5 +332,6 @@ pub fn build_convert_options_full(
         auto_exposure_max_gain: defaults.auto_exposure_max_gain,
         no_clip,
         enable_auto_wb: auto_wb,
+        use_gpu,
     })
 }

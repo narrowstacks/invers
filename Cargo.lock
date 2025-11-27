@@ -1660,6 +1660,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-allocator"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c151a2a5ef800297b4e79efa4f4bec035c5f51d5ae587287c9b952bdf734cacd"
+dependencies = [
+ "log",
+ "presser",
+ "thiserror 1.0.69",
+ "windows",
+]
+
+[[package]]
 name = "gpu-descriptor"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1908,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "invers-cli"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "clap",
  "invers-core",
@@ -1920,23 +1932,26 @@ dependencies = [
 
 [[package]]
 name = "invers-core"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
+ "bytemuck",
  "dirs",
  "image",
  "kamadak-exif",
  "ndarray",
  "png",
+ "pollster",
  "rayon",
  "serde",
  "serde_json",
  "serde_yaml",
  "tiff",
+ "wgpu",
 ]
 
 [[package]]
 name = "invers-gui"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2920,6 +2935,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "presser"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3072,6 +3093,12 @@ checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.3",
 ]
+
+[[package]]
+name = "range-alloc"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d6831663a5098ea164f89cff59c6284e95f4e3c76ce9848d4529f5ccca9bde"
 
 [[package]]
 name = "rav1e"
@@ -4150,6 +4177,7 @@ dependencies = [
  "document-features",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -4197,13 +4225,16 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
+ "bit-set",
  "bitflags 2.9.4",
+ "block",
  "bytemuck",
  "cfg_aliases 0.1.1",
  "core-graphics-types",
  "glow 0.14.2",
  "glutin_wgl_sys",
  "gpu-alloc",
+ "gpu-allocator",
  "gpu-descriptor",
  "js-sys",
  "khronos-egl",
@@ -4217,6 +4248,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "profiling",
+ "range-alloc",
  "raw-window-handle",
  "renderdoc-sys",
  "rustc-hash 1.1.0",
@@ -4226,6 +4258,7 @@ dependencies = [
  "web-sys",
  "wgpu-types",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
