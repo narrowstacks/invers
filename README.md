@@ -4,13 +4,13 @@ A professional-grade film negative to positive conversion tool written in Rust. 
 
 ## Features
 
-- **Intelligent Base Estimation**: Automatically detects film base color from image borders or manual ROI selection
-- **Multiple Inversion Modes**: Linear and logarithmic (density-based) inversion algorithms
+- **Orange Mask-Aware Inversion**: Intelligent algorithm that properly accounts for the orange mask in color negative film, eliminating the common blue cast problem
+- **Intelligent Base Estimation**: Automatically detects film base color from image borders with validation for orange mask characteristics
+- **Multiple Inversion Modes**: Mask-aware (default), linear, logarithmic, and divide-blend algorithms
 - **Advanced Tone Curves**: Asymmetric curves with independent toe/shoulder controls, plus traditional S-curves
-- **Color Correction**: 3×3 color matrices for orange mask and film dye correction
-- **Auto-Adjustments**: Auto-levels, auto-color, auto-exposure with configurable parameters
+- **Auto-Adjustments**: Auto-levels, auto-color, auto-exposure, and auto-white-balance with configurable parameters
 - **Shadow Recovery**: Adaptive shadow lift based on image analysis
-- **High-Quality Output**: 16-bit TIFF export with optional ICC profile embedding
+- **High-Quality Output**: 16-bit TIFF export in linear Rec. 2020 colorspace
 - **Parallel Processing**: Multi-threaded pipeline using Rayon for fast batch processing
 - **Film Presets**: YAML-based preset system for film-specific settings
 
@@ -131,20 +131,41 @@ invers preset create my-film --dir ./presets/
 invers convert [OPTIONS] <INPUT>
 
 Arguments:
-  <INPUT>  Input negative image file
+  <INPUT>  Input file or directory
 
 Options:
-  -o, --out <PATH>           Output file or directory
-  -p, --preset <FILE>        Film preset YAML file
-  -s, --scan-profile <FILE>  Scan profile YAML file
-  -r, --roi <ROI>            Base estimation ROI (x,y,w,h)
-  -f, --format <FORMAT>      Output format [default: tiff16]
-      --no-tone-curve        Skip tone curve application
-      --no-color-matrix      Skip color matrix application
-      --exposure <VALUE>     Exposure compensation (e.g., 1.2 = +0.26 EV)
-      --debug                Enable debug output
-  -h, --help                 Print help
+  -o, --out <DIR>                 Output directory
+  -p, --preset <FILE>             Film preset file
+  -s, --scan-profile <FILE>       Scan profile file
+      --roi <X,Y,W,H>             ROI for base estimation (x,y,width,height)
+      --base-method <METHOD>      Base estimation method: "regions" (default) or "border"
+      --border-percent <PERCENT>  Border percentage for "border" method (1-25%)
+      --export <FORMAT>           Export format: tiff16 (default) or dng
+      --colorspace <COLORSPACE>   Working colorspace [default: linear-rec2020]
+  -j, --threads <N>               Number of parallel threads
+      --inversion <MODE>          Inversion mode (see below)
+      --base <R,G,B>              Manual base RGB values (overrides auto-detection)
+      --exposure <FLOAT>          Exposure compensation (1.0 = no change)
+      --no-tonecurve              Skip tone curve application
+      --no-colormatrix            Skip color matrix correction
+      --no-auto-levels            Skip auto-levels (histogram stretching)
+      --preserve-headroom         Keep output in 0.005-0.98 range
+      --no-clip                   Disable all clipping operations
+      --auto-wb                   Apply auto white balance correction
+      --debug                     Enable debug output
+      --silent                    Suppress non-essential output
+  -v, --verbose                   Enable verbose output
+  -h, --help                      Print help
 ```
+
+#### Inversion Modes
+
+| Mode           | Description                                                                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mask-aware`   | **(Default)** Orange mask-aware inversion for color negative film. Properly accounts for the orange mask by applying per-channel shadow correction, eliminating blue casts. |
+| `linear`       | Simple `(base - negative) / base` inversion                                                                                                                                 |
+| `log`          | Density-based logarithmic inversion: `10^(log₁₀(base) - log₁₀(negative))`                                                                                                   |
+| `divide-blend` | Photoshop-style divide blend mode with gamma correction                                                                                                                     |
 
 ### `analyze-base` - Analyze Film Base
 
@@ -155,25 +176,28 @@ Arguments:
   <INPUT>  Input negative image file
 
 Options:
-  -r, --roi <ROI>    Base estimation ROI (x,y,w,h)
-  -s, --save <FILE>  Save estimation to YAML file
-  -h, --help         Print help
+      --roi <X,Y,W,H>    ROI for base estimation (x,y,width,height)
+      --save <FILE>      Save estimation to YAML file
+  -h, --help             Print help
 ```
 
 ### `batch` - Batch Process Files
 
 ```text
-invers batch [OPTIONS] <INPUTS>...
+invers batch [OPTIONS] [INPUTS]...
 
 Arguments:
-  <INPUTS>...  Input negative image files
+  [INPUTS]...  Input files or pattern
 
 Options:
-  -o, --out <DIR>            Output directory
-  -p, --preset <FILE>        Film preset YAML file
-  -t, --threads <N>          Number of parallel threads
-  -b, --base <FILE>          Shared base estimation file
-  -h, --help                 Print help
+      --base-from <FILE>  Base estimation file to use for all images
+  -p, --preset <FILE>     Film preset file
+      --export <FORMAT>   Export format: tiff16 (default) or dng
+  -o, --out <DIR>         Output directory
+  -j, --threads <N>       Number of parallel threads
+      --silent            Suppress non-essential output
+  -v, --verbose           Enable verbose output
+  -h, --help              Print help
 ```
 
 ### `preset` - Manage Presets
@@ -202,12 +226,16 @@ Input Image (TIFF/PNG)
         ▼
    ┌─────────────────────────────────────┐
    │  Base Estimation (auto or manual)   │
+   │  • Detect film base color           │
+   │  • Calculate mask profile           │
    └─────────────────────────────────────┘
         │
         ▼
    ┌─────────────────────────────────────┐
    │  Invert to Positive                 │
-   │  (linear or logarithmic mode)       │
+   │  • MaskAware: shadow floor correct  │
+   │  • Linear: (base - neg) / base      │
+   │  • Log: density-based inversion     │
    └─────────────────────────────────────┘
         │
         ▼
@@ -226,6 +254,7 @@ Input Image (TIFF/PNG)
         ▼
    ┌─────────────────────────────────────┐
    │  Color Matrix (3×3 correction)      │
+   │  (skipped for MaskAware mode)       │
    └─────────────────────────────────────┘
         │
         ▼
@@ -238,6 +267,21 @@ Input Image (TIFF/PNG)
    │  Export to TIFF16                   │
    └─────────────────────────────────────┘
 ```
+
+### Orange Mask-Aware Inversion
+
+The default `mask-aware` inversion mode compensates for the orange mask in color negative film:
+
+1. **Base Detection**: Analyzes the film base to determine its orange characteristics
+2. **Standard Inversion**: Inverts each channel: `positive = 1.0 - (negative / base)`
+3. **Shadow Floor Correction**: Subtracts per-channel floor values from green and blue to remove the blue cast that would otherwise result from inverting the orange mask
+
+The correction uses dye impurity values (how much extra light each dye layer absorbs) to calculate shadow floors:
+
+- **Magenta layer**: Absorbs some blue light (impurity ~0.5)
+- **Cyan layer**: Absorbs some green light (impurity ~0.3)
+
+The correction strength is automatically scaled based on how "orange" the detected base is.
 
 ## Film Presets
 
@@ -285,13 +329,13 @@ notes: "General-purpose color negative preset"
 Default pipeline settings can be configured in `pipeline_defaults.yml`:
 
 ```yaml
+inversion_mode: "mask-aware" # Default inversion algorithm
 auto_levels_enabled: true
 auto_levels_clip_percent: 0.1
 auto_color_enabled: true
 auto_exposure_enabled: true
 auto_exposure_target: 0.18
 shadow_lift_mode: "percentile"
-inversion_mode: "linear"
 highlight_compression: 0.95
 ```
 
@@ -383,6 +427,7 @@ invers/
 - [x] Core conversion pipeline
 - [x] TIFF/PNG decoding
 - [x] Base estimation
+- [x] Orange mask-aware inversion
 - [x] Tone curves (S-curve, asymmetric)
 - [x] Color matrix correction
 - [x] Auto-adjustments
@@ -406,3 +451,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - Built with Rust and the amazing ecosystem of image processing crates
 - Inspired by professional film scanning workflows and tools like Grain2Pixel and NegativeLabPro.
+- Evan Dorsky's [Why is Color Negative Film Orange?](https://observablehq.com/@dorskyee/understanding-color-film)

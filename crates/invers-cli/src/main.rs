@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use invers_cli::{
-    build_convert_options, build_convert_options_full, build_convert_options_with_inversion,
-    determine_output_path, parse_base_rgb, parse_inversion_mode, parse_roi,
+    build_convert_options, build_convert_options_full, determine_output_path, parse_base_rgb,
+    parse_inversion_mode, parse_roi,
 };
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -24,8 +25,8 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Output directory
-        #[arg(short, long, value_name = "DIR")]
+        /// Output directory or file path
+        #[arg(short, long, value_name = "PATH")]
         out: Option<PathBuf>,
 
         /// Film preset file
@@ -36,29 +37,9 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         scan_profile: Option<PathBuf>,
 
-        /// ROI for base estimation (x,y,width,height)
-        #[arg(long, value_name = "X,Y,W,H")]
-        roi: Option<String>,
-
-        /// Base estimation method: "regions" (default) or "border"
-        #[arg(long, value_name = "METHOD", default_value = "regions")]
-        base_method: String,
-
-        /// Border percentage for "border" base method (1-25%, default: 5)
-        #[arg(long, value_name = "PERCENT", default_value = "5.0")]
-        border_percent: f32,
-
         /// Export format (tiff16 or dng)
         #[arg(long, value_name = "FORMAT", default_value = "tiff16")]
         export: String,
-
-        /// Working colorspace
-        #[arg(long, value_name = "COLORSPACE", default_value = "linear-rec2020")]
-        colorspace: String,
-
-        /// Number of parallel threads
-        #[arg(short = 'j', long, value_name = "N")]
-        threads: Option<usize>,
 
         /// Skip tone curve application
         #[arg(long)]
@@ -73,65 +54,51 @@ enum Commands {
         exposure: f32,
 
         /// Inversion mode: "mask-aware" (default), "linear", "log", or "divide-blend"
-        /// - mask-aware: Orange mask-aware inversion for color negative film (recommended)
-        /// - linear: Simple (base - negative) / base inversion
-        /// - log: Density-based logarithmic inversion
-        /// - divide-blend: Photoshop-style divide blend mode with gamma
         #[arg(long, value_name = "MODE")]
         inversion: Option<String>,
 
         /// Manual base RGB values (comma-separated: R,G,B)
-        /// Overrides automatic base estimation
+        /// Use 'invers analyze' to determine these values, then reuse across a roll
         #[arg(long, value_name = "R,G,B")]
         base: Option<String>,
-
-        /// Skip auto-levels (histogram stretching)
-        #[arg(long)]
-        no_auto_levels: bool,
-
-        /// Preserve shadow/highlight headroom (don't stretch to full 0-1 range)
-        /// Sets output range to approximately 0.005-0.98
-        #[arg(long)]
-        preserve_headroom: bool,
-
-        /// Disable all clipping operations to preserve full dynamic range
-        /// Prevents auto-levels from stretching highlights beyond original values
-        #[arg(long)]
-        no_clip: bool,
-
-        /// Apply auto white balance correction
-        #[arg(long)]
-        auto_wb: bool,
-
-        /// Enable debug output showing intermediate statistics
-        #[arg(long)]
-        debug: bool,
 
         /// Suppress non-essential output (timing, progress messages)
         #[arg(long)]
         silent: bool,
-
-        /// Enable verbose output (base estimation details, config loading)
-        #[arg(short, long)]
-        verbose: bool,
     },
 
-    /// Analyze and estimate film base from ROI
-    AnalyzeBase {
-        /// Input file
+    /// Analyze image and estimate film base color
+    ///
+    /// Use this command to inspect an image and determine base RGB values
+    /// that can be reused across multiple frames from the same roll of film.
+    Analyze {
+        /// Input file to analyze
+        #[arg(value_name = "INPUT")]
         input: PathBuf,
 
         /// ROI for base estimation (x,y,width,height)
         #[arg(long, value_name = "X,Y,W,H")]
         roi: Option<String>,
 
-        /// Save base estimation to file
+        /// Base estimation method: "regions" (default) or "border"
+        #[arg(long, value_name = "METHOD", default_value = "regions")]
+        base_method: String,
+
+        /// Border percentage for "border" base method (1-25%, default: 5)
+        #[arg(long, value_name = "PERCENT", default_value = "5.0")]
+        border_percent: f32,
+
+        /// Output as JSON (machine-readable)
+        #[arg(long)]
+        json: bool,
+
+        /// Save analysis to file
         #[arg(short, long, value_name = "FILE")]
         save: Option<PathBuf>,
 
-        /// Use auto-estimation heuristic
-        #[arg(long)]
-        auto: bool,
+        /// Show detailed analysis output
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Batch process multiple files with shared settings
@@ -305,55 +272,36 @@ fn main() {
             out,
             preset,
             scan_profile,
-            roi,
-            base_method,
-            border_percent,
             export,
-            colorspace,
-            threads,
             no_tonecurve,
             no_colormatrix,
             exposure,
             inversion,
             base,
-            no_auto_levels,
-            preserve_headroom,
-            no_clip,
-            auto_wb,
-            debug,
             silent,
-            verbose,
         } => cmd_convert(
             input,
             out,
             preset,
             scan_profile,
-            roi,
-            base_method,
-            border_percent,
             export,
-            colorspace,
-            threads,
             no_tonecurve,
             no_colormatrix,
             exposure,
             inversion,
             base,
-            no_auto_levels,
-            preserve_headroom,
-            no_clip,
-            auto_wb,
-            debug,
             silent,
-            verbose,
         ),
 
-        Commands::AnalyzeBase {
+        Commands::Analyze {
             input,
             roi,
+            base_method,
+            border_percent,
+            json,
             save,
-            auto,
-        } => cmd_analyze_base(input, roi, save, auto),
+            verbose,
+        } => cmd_analyze(input, roi, base_method, border_percent, json, save, verbose),
 
         Commands::Batch {
             inputs,
@@ -436,30 +384,15 @@ fn cmd_convert(
     out: Option<PathBuf>,
     preset: Option<PathBuf>,
     scan_profile_path: Option<PathBuf>,
-    roi: Option<String>,
-    base_method: String,
-    border_percent: f32,
     export: String,
-    colorspace: String,
-    _threads: Option<usize>,
     no_tonecurve: bool,
     no_colormatrix: bool,
     exposure: f32,
     inversion: Option<String>,
     base: Option<String>,
-    no_auto_levels: bool,
-    preserve_headroom: bool,
-    no_clip: bool,
-    auto_wb: bool,
-    debug: bool,
     silent: bool,
-    verbose: bool,
 ) -> Result<(), String> {
     let start_time = Instant::now();
-
-    // Set verbose mode for core library
-    invers_core::config::set_verbose(verbose);
-    invers_core::config::log_config_usage();
 
     if !silent {
         println!("Converting {} to positive...", input.display());
@@ -499,7 +432,7 @@ fn cmd_convert(
         None
     };
 
-    // Parse manual base values or estimate
+    // Parse manual base values or auto-estimate using default method
     let base_estimation = if let Some(base_str) = base {
         // Parse manual base values (R,G,B format)
         let base_rgb = parse_base_rgb(&base_str)?;
@@ -511,8 +444,7 @@ fn cmd_convert(
             );
         }
         // Auto-detect mask profile from manual base values
-        let mask_profile =
-            invers_core::models::MaskProfile::from_base_medians(&base_rgb);
+        let mask_profile = invers_core::models::MaskProfile::from_base_medians(&base_rgb);
         invers_core::models::BaseEstimation {
             roi: None,
             medians: base_rgb,
@@ -521,40 +453,21 @@ fn cmd_convert(
             mask_profile: Some(mask_profile),
         }
     } else {
-        // Parse ROI if provided
-        let roi_rect = if let Some(roi_str) = roi {
-            Some(parse_roi(&roi_str)?)
-        } else {
-            None
-        };
-
-        // Parse base estimation method
-        let method = match base_method.to_lowercase().as_str() {
-            "border" => Some(invers_core::models::BaseEstimationMethod::Border),
-            "regions" | _ => Some(invers_core::models::BaseEstimationMethod::Regions),
-        };
-
-        // Estimate base
+        // Auto-estimate base using default regions method
         if !silent {
             println!("Estimating film base...");
         }
         let estimation = invers_core::pipeline::estimate_base(
             &decoded,
-            roi_rect,
-            method,
-            Some(border_percent),
+            None, // No ROI - use auto-detection
+            Some(invers_core::models::BaseEstimationMethod::Regions),
+            None, // Default border percent
         )?;
         if !silent {
             println!(
                 "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
                 estimation.medians[0], estimation.medians[1], estimation.medians[2]
             );
-            if let Some(noise) = &estimation.noise_stats {
-                println!(
-                    "  Noise (RGB): [{:.4}, {:.4}, {:.4}]",
-                    noise[0], noise[1], noise[2]
-                );
-            }
         }
         estimation
     };
@@ -586,27 +499,14 @@ fn cmd_convert(
         if let Some(mode) = &inversion_mode {
             println!("Using inversion mode: {:?}", mode);
         }
-
-        if no_auto_levels {
-            println!("Auto-levels disabled");
-        }
-        if preserve_headroom {
-            println!("Preserving shadow/highlight headroom");
-        }
-        if no_clip {
-            println!("No-clip mode: preserving full dynamic range");
-        }
-        if auto_wb {
-            println!("Auto white balance enabled");
-        }
     }
 
-    // Build conversion options using shared utility
+    // Build conversion options using shared utility (with sensible defaults)
     let options = build_convert_options_full(
         input.clone(),
         output_dir,
         &export,
-        colorspace,
+        "linear-rec2020".to_string(), // Default colorspace
         Some(base_estimation),
         film_preset,
         scan_profile,
@@ -614,11 +514,11 @@ fn cmd_convert(
         no_colormatrix,
         exposure,
         inversion_mode,
-        no_auto_levels,
-        preserve_headroom,
-        no_clip,
-        auto_wb,
-        debug,
+        false, // no_auto_levels - use default (enabled)
+        false, // preserve_headroom - use default
+        false, // no_clip - use default
+        false, // auto_wb - disabled by default
+        false, // debug - disabled
     )?;
 
     // Process image
@@ -660,58 +560,215 @@ fn cmd_convert(
     Ok(())
 }
 
-fn cmd_analyze_base(
+/// Analysis result structure for JSON output
+#[derive(Serialize)]
+struct AnalysisResult {
+    file: String,
+    dimensions: [u32; 2],
+    channels: u8,
+    base_estimation: BaseEstimationResult,
+    channel_stats: ChannelStats,
+}
+
+#[derive(Serialize)]
+struct BaseEstimationResult {
+    method: String,
+    medians: [f32; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    noise_stats: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roi: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Serialize)]
+struct ChannelStats {
+    red: ChannelStat,
+    green: ChannelStat,
+    blue: ChannelStat,
+}
+
+#[derive(Serialize)]
+struct ChannelStat {
+    min: f32,
+    max: f32,
+    mean: f32,
+}
+
+fn compute_channel_stats(decoded: &invers_core::decoders::DecodedImage) -> ChannelStats {
+    let pixels = &decoded.data;
+    let channels = decoded.channels as usize;
+
+    let mut r_min = f32::MAX;
+    let mut r_max = f32::MIN;
+    let mut r_sum = 0.0f64;
+    let mut g_min = f32::MAX;
+    let mut g_max = f32::MIN;
+    let mut g_sum = 0.0f64;
+    let mut b_min = f32::MAX;
+    let mut b_max = f32::MIN;
+    let mut b_sum = 0.0f64;
+
+    let pixel_count = pixels.len() / channels;
+
+    for i in 0..pixel_count {
+        let r = pixels[i * channels];
+        let g = pixels[i * channels + 1];
+        let b = pixels[i * channels + 2];
+
+        r_min = r_min.min(r);
+        r_max = r_max.max(r);
+        r_sum += r as f64;
+
+        g_min = g_min.min(g);
+        g_max = g_max.max(g);
+        g_sum += g as f64;
+
+        b_min = b_min.min(b);
+        b_max = b_max.max(b);
+        b_sum += b as f64;
+    }
+
+    let count = pixel_count as f64;
+
+    ChannelStats {
+        red: ChannelStat {
+            min: r_min,
+            max: r_max,
+            mean: (r_sum / count) as f32,
+        },
+        green: ChannelStat {
+            min: g_min,
+            max: g_max,
+            mean: (g_sum / count) as f32,
+        },
+        blue: ChannelStat {
+            min: b_min,
+            max: b_max,
+            mean: (b_sum / count) as f32,
+        },
+    }
+}
+
+fn cmd_analyze(
     input: PathBuf,
     roi: Option<String>,
+    base_method: String,
+    border_percent: f32,
+    json_output: bool,
     save: Option<PathBuf>,
-    auto: bool,
+    verbose: bool,
 ) -> Result<(), String> {
-    println!("Analyzing film base from {}...", input.display());
-
     // Decode input image
     let decoded = invers_core::decoders::decode_image(&input)?;
-    println!(
-        "Image: {}x{}, {} channels",
-        decoded.width, decoded.height, decoded.channels
-    );
 
-    // Parse ROI if provided, or use auto if specified
-    let roi_rect = if auto {
-        println!("Using automatic base estimation...");
-        None
-    } else if let Some(roi_str) = roi {
-        Some(parse_roi(&roi_str)?)
+    // Parse ROI if provided
+    let roi_rect = if let Some(roi_str) = &roi {
+        Some(parse_roi(roi_str)?)
     } else {
-        return Err("Either --roi or --auto must be specified".to_string());
+        None
     };
 
-    // Estimate base (use default regions method for analyze-base command)
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded, roi_rect, None, None)?;
+    // Parse base estimation method
+    let method = match base_method.to_lowercase().as_str() {
+        "border" => invers_core::models::BaseEstimationMethod::Border,
+        "regions" | _ => invers_core::models::BaseEstimationMethod::Regions,
+    };
 
-    // Print results
-    println!("\nFilm Base Estimation:");
-    if let Some(roi) = base_estimation.roi {
-        println!("  ROI: ({}, {}, {}, {})", roi.0, roi.1, roi.2, roi.3);
-    }
-    println!(
-        "  Medians (RGB): [{:.6}, {:.6}, {:.6}]",
-        base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
-    );
-    if let Some(noise) = &base_estimation.noise_stats {
+    // Estimate base
+    let base_estimation = invers_core::pipeline::estimate_base(
+        &decoded,
+        roi_rect,
+        Some(method),
+        Some(border_percent),
+    )?;
+
+    // Compute channel statistics
+    let channel_stats = compute_channel_stats(&decoded);
+
+    // Build analysis result
+    let result = AnalysisResult {
+        file: input.display().to_string(),
+        dimensions: [decoded.width, decoded.height],
+        channels: decoded.channels,
+        base_estimation: BaseEstimationResult {
+            method: base_method.clone(),
+            medians: base_estimation.medians,
+            noise_stats: base_estimation.noise_stats,
+            roi: base_estimation.roi,
+        },
+        channel_stats,
+    };
+
+    if json_output {
+        // JSON output
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| format!("Failed to serialize analysis: {}", e))?;
+        println!("{}", json);
+    } else {
+        // Human-readable output
+        println!("Analyzing: {}\n", input.display());
+
+        println!("Image Info:");
+        println!("  Dimensions: {}x{}", decoded.width, decoded.height);
+        println!("  Channels: {}", decoded.channels);
+
+        println!("\nFilm Base Estimation:");
+        println!("  Method: {}", base_method);
         println!(
-            "  Noise (RGB): [{:.6}, {:.6}, {:.6}]",
-            noise[0], noise[1], noise[2]
+            "  Base RGB: [{:.4}, {:.4}, {:.4}]",
+            base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]
+        );
+        if let Some(noise) = &base_estimation.noise_stats {
+            println!(
+                "  Noise RGB: [{:.4}, {:.4}, {:.4}]",
+                noise[0], noise[1], noise[2]
+            );
+        }
+        if let Some(roi) = base_estimation.roi {
+            println!("  ROI: ({}, {}, {}, {})", roi.0, roi.1, roi.2, roi.3);
+        }
+
+        if verbose {
+            println!("\nChannel Statistics:");
+            println!(
+                "  Red:   min={:.4}, max={:.4}, mean={:.4}",
+                result.channel_stats.red.min,
+                result.channel_stats.red.max,
+                result.channel_stats.red.mean
+            );
+            println!(
+                "  Green: min={:.4}, max={:.4}, mean={:.4}",
+                result.channel_stats.green.min,
+                result.channel_stats.green.max,
+                result.channel_stats.green.mean
+            );
+            println!(
+                "  Blue:  min={:.4}, max={:.4}, mean={:.4}",
+                result.channel_stats.blue.min,
+                result.channel_stats.blue.max,
+                result.channel_stats.blue.mean
+            );
+        }
+
+        println!("\nUsage:");
+        println!(
+            "  invers convert {} --base {:.4},{:.4},{:.4}",
+            input.display(),
+            base_estimation.medians[0],
+            base_estimation.medians[1],
+            base_estimation.medians[2]
         );
     }
-    println!("  Auto-estimated: {}", base_estimation.auto_estimated);
 
     // Save if requested
     if let Some(save_path) = save {
-        let json = serde_json::to_string_pretty(&base_estimation)
-            .map_err(|e| format!("Failed to serialize base estimation: {}", e))?;
-        std::fs::write(&save_path, json)
-            .map_err(|e| format!("Failed to write base estimation file: {}", e))?;
-        println!("\nBase estimation saved to: {}", save_path.display());
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| format!("Failed to serialize analysis: {}", e))?;
+        std::fs::write(&save_path, &json)
+            .map_err(|e| format!("Failed to write analysis file: {}", e))?;
+        if !json_output {
+            println!("\nAnalysis saved to: {}", save_path.display());
+        }
     }
 
     Ok(())

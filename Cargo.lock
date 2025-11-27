@@ -1908,18 +1908,19 @@ dependencies = [
 
 [[package]]
 name = "invers-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "clap",
  "invers-core",
  "rayon",
+ "serde",
  "serde_json",
  "serde_yaml",
 ]
 
 [[package]]
 name = "invers-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "dirs",
  "image",
@@ -1935,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "invers-gui"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "eframe",
  "egui",
