@@ -2,7 +2,31 @@ use crate::models::{BaseSamplingMode, InversionMode, ShadowLiftMode};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Once, OnceLock};
+
+// Global verbose flag for controlling debug output
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Set the global verbose flag. When true, debug messages will be printed.
+pub fn set_verbose(verbose: bool) {
+    VERBOSE.store(verbose, Ordering::SeqCst);
+}
+
+/// Check if verbose mode is enabled.
+pub fn is_verbose() -> bool {
+    VERBOSE.load(Ordering::SeqCst)
+}
+
+/// Print a message to stderr only if verbose mode is enabled.
+#[macro_export]
+macro_rules! verbose_println {
+    ($($arg:tt)*) => {
+        if $crate::config::is_verbose() {
+            eprintln!($($arg)*);
+        }
+    };
+}
 
 /// Canonical list of candidate config file names we search for on disk.
 const CONFIG_FILENAMES: &[&str] = &["pipeline.yml", "pipeline.yaml", "pipeline_defaults.yml"];
@@ -423,9 +447,12 @@ pub fn pipeline_config_handle() -> &'static PipelineConfigHandle {
     PIPELINE_CONFIG_HANDLE.get_or_init(|| load_pipeline_config(None))
 }
 
-/// Print config source and warnings the first time it is requested.
+/// Print config source and warnings the first time it is requested (only in verbose mode).
 pub fn log_config_usage() {
     PRINT_CONFIG_ONCE.call_once(|| {
+        if !is_verbose() {
+            return;
+        }
         let handle = pipeline_config_handle();
         if let Some(source) = &handle.source {
             eprintln!("[invers] Loaded pipeline config from {}", source.display());

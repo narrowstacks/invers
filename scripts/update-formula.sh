@@ -68,7 +68,7 @@ class Invers < Formula
   desc "Professional-grade film negative to positive conversion tool"
   homepage "https://github.com/$REPO"
   version "$VERSION"
-  license any_of: ["MIT", "Apache-2.0"]
+  license any_of: ["MIT"]
 
   on_macos do
     on_intel do

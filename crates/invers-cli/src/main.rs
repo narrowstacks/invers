@@ -6,6 +6,7 @@ use invers_cli::{
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 #[derive(Parser)]
 #[command(name = "invers")]
@@ -92,6 +93,14 @@ enum Commands {
         /// Enable debug output showing intermediate statistics
         #[arg(long)]
         debug: bool,
+
+        /// Suppress non-essential output (timing, progress messages)
+        #[arg(long)]
+        silent: bool,
+
+        /// Enable verbose output (base estimation details, config loading)
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Analyze and estimate film base from ROI
@@ -137,6 +146,14 @@ enum Commands {
         /// Number of parallel threads
         #[arg(short = 'j', long, value_name = "N")]
         threads: Option<usize>,
+
+        /// Suppress non-essential output (timing, progress messages)
+        #[arg(long)]
+        silent: bool,
+
+        /// Enable verbose output (base estimation details, config loading)
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Manage film presets
@@ -289,6 +306,8 @@ fn main() {
             no_auto_levels,
             preserve_headroom,
             debug,
+            silent,
+            verbose,
         } => cmd_convert(
             input,
             out,
@@ -308,6 +327,8 @@ fn main() {
             no_auto_levels,
             preserve_headroom,
             debug,
+            silent,
+            verbose,
         ),
 
         Commands::AnalyzeBase {
@@ -324,7 +345,9 @@ fn main() {
             export,
             out,
             threads,
-        } => cmd_batch(inputs, base_from, preset, export, out, threads),
+            silent,
+            verbose,
+        } => cmd_batch(inputs, base_from, preset, export, out, threads, silent, verbose),
 
         Commands::Preset { action } => match action {
             PresetAction::List { dir } => cmd_preset_list(dir),
@@ -410,31 +433,47 @@ fn cmd_convert(
     no_auto_levels: bool,
     preserve_headroom: bool,
     debug: bool,
+    silent: bool,
+    verbose: bool,
 ) -> Result<(), String> {
+    let start_time = Instant::now();
+
+    // Set verbose mode for core library
+    invers_core::config::set_verbose(verbose);
     invers_core::config::log_config_usage();
 
-    println!("Converting {} to positive...", input.display());
+    if !silent {
+        println!("Converting {} to positive...", input.display());
+    }
 
     // Decode input image
-    println!("Decoding image...");
+    if !silent {
+        println!("Decoding image...");
+    }
     let decoded = invers_core::decoders::decode_image(&input)?;
-    println!(
-        "  Image: {}x{}, {} channels",
-        decoded.width, decoded.height, decoded.channels
-    );
+    if !silent {
+        println!(
+            "  Image: {}x{}, {} channels",
+            decoded.width, decoded.height, decoded.channels
+        );
+    }
 
     // Load scan profile if provided
     let scan_profile = if let Some(profile_path) = scan_profile_path {
-        println!("Loading scan profile from {}...", profile_path.display());
-        let profile = invers_core::presets::load_scan_profile(&profile_path)?;
-        println!("  Profile: {} ({})", profile.name, profile.source_type);
-        if let Some(ref hsl) = profile.hsl_adjustments {
-            if hsl.has_adjustments() {
-                println!("  HSL adjustments: enabled");
-            }
+        if !silent {
+            println!("Loading scan profile from {}...", profile_path.display());
         }
-        if let Some(gamma) = profile.default_gamma {
-            println!("  Default gamma: [{:.2}, {:.2}, {:.2}]", gamma[0], gamma[1], gamma[2]);
+        let profile = invers_core::presets::load_scan_profile(&profile_path)?;
+        if !silent {
+            println!("  Profile: {} ({})", profile.name, profile.source_type);
+            if let Some(ref hsl) = profile.hsl_adjustments {
+                if hsl.has_adjustments() {
+                    println!("  HSL adjustments: enabled");
+                }
+            }
+            if let Some(gamma) = profile.default_gamma {
+                println!("  Default gamma: [{:.2}, {:.2}, {:.2}]", gamma[0], gamma[1], gamma[2]);
+            }
         }
         Some(profile)
     } else {
@@ -445,11 +484,13 @@ fn cmd_convert(
     let base_estimation = if let Some(base_str) = base {
         // Parse manual base values (R,G,B format)
         let base_rgb = parse_base_rgb(&base_str)?;
-        println!("Using manual base values...");
-        println!(
-            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
-            base_rgb[0], base_rgb[1], base_rgb[2]
-        );
+        if !silent {
+            println!("Using manual base values...");
+            println!(
+                "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+                base_rgb[0], base_rgb[1], base_rgb[2]
+            );
+        }
         invers_core::models::BaseEstimation {
             roi: None,
             medians: base_rgb,
@@ -471,29 +512,35 @@ fn cmd_convert(
         };
 
         // Estimate base
-        println!("Estimating film base...");
+        if !silent {
+            println!("Estimating film base...");
+        }
         let estimation = invers_core::pipeline::estimate_base(
             &decoded,
             roi_rect,
             method,
             Some(border_percent),
         )?;
-        println!(
-            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
-            estimation.medians[0], estimation.medians[1], estimation.medians[2]
-        );
-        if let Some(noise) = &estimation.noise_stats {
+        if !silent {
             println!(
-                "  Noise (RGB): [{:.4}, {:.4}, {:.4}]",
-                noise[0], noise[1], noise[2]
+                "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+                estimation.medians[0], estimation.medians[1], estimation.medians[2]
             );
+            if let Some(noise) = &estimation.noise_stats {
+                println!(
+                    "  Noise (RGB): [{:.4}, {:.4}, {:.4}]",
+                    noise[0], noise[1], noise[2]
+                );
+            }
         }
         estimation
     };
 
     // Load film preset if provided
     let film_preset = if let Some(preset_path) = preset {
-        println!("Loading film preset from {}...", preset_path.display());
+        if !silent {
+            println!("Loading film preset from {}...", preset_path.display());
+        }
         Some(invers_core::presets::load_film_preset(&preset_path)?)
     } else {
         None
@@ -501,7 +548,9 @@ fn cmd_convert(
 
     // Prepare output path
     let output_path = determine_output_path(&input, &out, &export)?;
-    println!("Output: {}", output_path.display());
+    if !silent {
+        println!("Output: {}", output_path.display());
+    }
 
     let output_dir = output_path
         .parent()
@@ -510,15 +559,17 @@ fn cmd_convert(
 
     // Parse inversion mode if specified
     let inversion_mode = parse_inversion_mode(inversion.as_deref())?;
-    if let Some(mode) = &inversion_mode {
-        println!("Using inversion mode: {:?}", mode);
-    }
+    if !silent {
+        if let Some(mode) = &inversion_mode {
+            println!("Using inversion mode: {:?}", mode);
+        }
 
-    if no_auto_levels {
-        println!("Auto-levels disabled");
-    }
-    if preserve_headroom {
-        println!("Preserving shadow/highlight headroom");
+        if no_auto_levels {
+            println!("Auto-levels disabled");
+        }
+        if preserve_headroom {
+            println!("Preserving shadow/highlight headroom");
+        }
     }
 
     // Build conversion options using shared utility
@@ -540,18 +591,22 @@ fn cmd_convert(
     )?;
 
     // Process image
-    println!("Processing image...");
+    if !silent {
+        println!("Processing image...");
+    }
     let processed = invers_core::pipeline::process_image(decoded, &options)?;
 
     // Export
-    println!(
-        "Exporting to {}...",
-        if options.output_format == invers_core::models::OutputFormat::Tiff16 {
-            "TIFF16"
-        } else {
-            "DNG"
-        }
-    );
+    if !silent {
+        println!(
+            "Exporting to {}...",
+            if options.output_format == invers_core::models::OutputFormat::Tiff16 {
+                "TIFF16"
+            } else {
+                "DNG"
+            }
+        );
+    }
     match options.output_format {
         invers_core::models::OutputFormat::Tiff16 => {
             invers_core::exporters::export_tiff16(&processed, &output_path, None)?;
@@ -561,7 +616,16 @@ fn cmd_convert(
         }
     }
 
-    println!("Done! Positive image saved to: {}", output_path.display());
+    let elapsed = start_time.elapsed();
+    if !silent {
+        println!(
+            "Done! Positive image saved to: {} ({:.2}s)",
+            output_path.display(),
+            elapsed.as_secs_f64()
+        );
+    } else {
+        println!("{}", output_path.display());
+    }
     Ok(())
 }
 
@@ -629,7 +693,13 @@ fn cmd_batch(
     export: String,
     out: Option<PathBuf>,
     threads: Option<usize>,
+    silent: bool,
+    verbose: bool,
 ) -> Result<(), String> {
+    let batch_start = Instant::now();
+
+    // Set verbose mode for core library
+    invers_core::config::set_verbose(verbose);
     invers_core::config::log_config_usage();
 
     if inputs.is_empty() {
@@ -642,7 +712,9 @@ fn cmd_batch(
             .num_threads(num_threads)
             .build_global()
             .map_err(|e| format!("Failed to configure thread pool: {}", e))?;
-        println!("Using {} threads for parallel processing", num_threads);
+        if !silent {
+            println!("Using {} threads for parallel processing", num_threads);
+        }
     }
 
     // Determine output directory
@@ -654,15 +726,19 @@ fn cmd_batch(
 
     // Load shared base estimation if provided
     let shared_base = if let Some(base_path) = base_from {
-        println!("Loading base estimation from {}...", base_path.display());
+        if !silent {
+            println!("Loading base estimation from {}...", base_path.display());
+        }
         let json = std::fs::read_to_string(&base_path)
             .map_err(|e| format!("Failed to read base estimation file: {}", e))?;
         let base: invers_core::models::BaseEstimation = serde_json::from_str(&json)
             .map_err(|e| format!("Failed to parse base estimation: {}", e))?;
-        println!(
-            "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
-            base.medians[0], base.medians[1], base.medians[2]
-        );
+        if !silent {
+            println!(
+                "  Base (RGB): [{:.4}, {:.4}, {:.4}]",
+                base.medians[0], base.medians[1], base.medians[2]
+            );
+        }
         Some(base)
     } else {
         None
@@ -670,22 +746,28 @@ fn cmd_batch(
 
     // Load shared film preset if provided
     let film_preset = if let Some(preset_path) = &preset {
-        println!("Loading film preset from {}...", preset_path.display());
+        if !silent {
+            println!("Loading film preset from {}...", preset_path.display());
+        }
         Some(invers_core::presets::load_film_preset(preset_path)?)
     } else {
         None
     };
 
-    println!("\nProcessing {} files in parallel...\n", inputs.len());
+    if !silent {
+        println!("\nProcessing {} files in parallel...\n", inputs.len());
+    }
 
     // Progress tracking
     let processed_count = AtomicUsize::new(0);
     let total_files = inputs.len();
 
-    // Process files in parallel
-    let results: Vec<Result<PathBuf, String>> = inputs
+    // Process files in parallel, returning both path and timing
+    let results: Vec<Result<(PathBuf, f64), String>> = inputs
         .par_iter()
         .map(|input| {
+            let file_start = Instant::now();
+
             // Decode image
             let decoded = invers_core::decoders::decode_image(input)?;
 
@@ -731,17 +813,24 @@ fn cmd_batch(
                 }
             }
 
+            let file_elapsed = file_start.elapsed().as_secs_f64();
+
             // Update progress
             let count = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
-            println!(
-                "[{}/{}] Processed: {} -> {}",
-                count,
-                total_files,
-                input.display(),
-                output_path.display()
-            );
+            if !silent {
+                println!(
+                    "[{}/{}] {} -> {} ({:.2}s)",
+                    count,
+                    total_files,
+                    input.display(),
+                    output_path.display(),
+                    file_elapsed
+                );
+            } else {
+                println!("{}", output_path.display());
+            }
 
-            Ok(output_path)
+            Ok((output_path, file_elapsed))
         })
         .collect();
 
@@ -758,17 +847,28 @@ fn cmd_batch(
         }
     }
 
-    println!("\n========================================");
-    println!("BATCH PROCESSING COMPLETE");
-    println!("========================================");
-    println!("  Successful: {}", success_count);
-    println!("  Failed:     {}", errors.len());
-    println!("  Output dir: {}", output_dir.display());
+    let batch_elapsed = batch_start.elapsed();
 
-    if !errors.is_empty() {
-        println!("\nErrors:");
-        for (path, error) in &errors {
-            println!("  {}: {}", path.display(), error);
+    if !silent {
+        println!("\n========================================");
+        println!("BATCH PROCESSING COMPLETE");
+        println!("========================================");
+        println!("  Successful: {}", success_count);
+        println!("  Failed:     {}", errors.len());
+        println!("  Output dir: {}", output_dir.display());
+        println!("  Total time: {:.2}s", batch_elapsed.as_secs_f64());
+        if success_count > 0 {
+            println!(
+                "  Avg time:   {:.2}s per file",
+                batch_elapsed.as_secs_f64() / success_count as f64
+            );
+        }
+
+        if !errors.is_empty() {
+            println!("\nErrors:");
+            for (path, error) in &errors {
+                println!("  {}: {}", path.display(), error);
+            }
         }
     }
 

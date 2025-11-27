@@ -14,7 +14,10 @@
       "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/seattle-01 002_neg.tif\" )",
       "Bash(chmod:*)",
       "Bash(./target/release/invers:*)",
-      "Bash(gh repo create:*)"
+      "Bash(gh repo create:*)",
+      "Bash(cargo clean:*)",
+      "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers convert:*)",
+      "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers batch:*)"
     ],
     "deny": [],
     "ask": []

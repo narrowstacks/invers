@@ -5,6 +5,7 @@
 use crate::config;
 use crate::decoders::DecodedImage;
 use crate::models::{BaseEstimation, BaseEstimationMethod, ConvertOptions};
+use crate::verbose_println;
 use rayon::prelude::*;
 
 /// Prevent values from ever hitting absolute black/white while retaining full range.
@@ -333,11 +334,11 @@ fn estimate_base_from_manual_roi(
     let (num_brightest, percentage, medians, noise_stats) =
         compute_base_stats(&roi_pixels, sample_fraction);
 
-    eprintln!(
+    verbose_println!(
         "[BASE] Manual ROI | using {} px ({:.1}%) brightest",
         num_brightest, percentage
     );
-    eprintln!(
+    verbose_println!(
         "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
         medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
     );
@@ -345,10 +346,10 @@ fn estimate_base_from_manual_roi(
     let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
 
     if !valid {
-        eprintln!("[BASE]   -> manual ROI has warnings: {}", reason);
-        eprintln!("[BASE]   -> using despite warnings (manual ROI)");
+        verbose_println!("[BASE]   -> manual ROI has warnings: {}", reason);
+        verbose_println!("[BASE]   -> using despite warnings (manual ROI)");
     } else {
-        eprintln!("[BASE]   -> accepted");
+        verbose_println!("[BASE]   -> accepted");
     }
 
     Ok(BaseEstimation {
@@ -452,7 +453,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         let (x, y, width, height) = candidate.rect;
 
         if x + width > image.width || y + height > image.height || width == 0 || height == 0 {
-            eprintln!(
+            verbose_println!(
                 "[BASE] Skipping {} candidate: ROI out of bounds ({}x{} at {}, {})",
                 candidate.label, width, height, x, y
             );
@@ -461,7 +462,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
 
         let roi_pixels = extract_roi_pixels(image, x, y, width, height);
         if roi_pixels.is_empty() {
-            eprintln!(
+            verbose_println!(
                 "[BASE] Skipping {} candidate: ROI is empty",
                 candidate.label
             );
@@ -473,7 +474,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
 
         // Reject regions with too many clipped pixels (>50% clipped = saturated border)
         if filtered.clipped_ratio > 0.50 {
-            eprintln!(
+            verbose_println!(
                 "[BASE] Skipping {} candidate: {:.0}% pixels clipped (saturated border)",
                 candidate.label,
                 filtered.clipped_ratio * 100.0
@@ -482,7 +483,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         }
 
         if filtered.pixels.is_empty() {
-            eprintln!(
+            verbose_println!(
                 "[BASE] Skipping {} candidate: no valid pixels after filtering",
                 candidate.label
             );
@@ -492,16 +493,16 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         let (num_brightest, percentage, medians, noise_stats) =
             compute_base_stats(&filtered.pixels, sample_fraction);
 
-        eprintln!(
+        verbose_println!(
             "[BASE] Candidate {:>6} | brightness={:.4} | using {} px ({:.1}%)",
             candidate.label, candidate.brightness, num_brightest, percentage
         );
-        eprintln!(
+        verbose_println!(
             "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
             medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
         );
         if filtered.clipped_ratio > 0.1 {
-            eprintln!(
+            verbose_println!(
                 "[BASE]   note: {:.0}% pixels were clipped",
                 filtered.clipped_ratio * 100.0
             );
@@ -510,7 +511,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
 
         if valid {
-            eprintln!("[BASE]   -> accepted {} candidate", candidate.label);
+            verbose_println!("[BASE]   -> accepted {} candidate", candidate.label);
             return Ok(BaseEstimation {
                 roi: Some(candidate.rect),
                 medians,
@@ -518,7 +519,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
                 auto_estimated: true,
             });
         } else {
-            eprintln!("[BASE]   -> rejected: {}", reason);
+            verbose_println!("[BASE]   -> rejected: {}", reason);
             if fallback.is_none() {
                 fallback = Some(BaseEstimation {
                     roi: Some(candidate.rect),
@@ -531,10 +532,10 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
     }
 
     // Try histogram-based whole-image estimation as last resort
-    eprintln!("[BASE] All region candidates rejected; trying histogram-based estimation...");
+    verbose_println!("[BASE] All region candidates rejected; trying histogram-based estimation...");
     match estimate_base_from_histogram(image) {
         Ok(histogram_estimation) => {
-            eprintln!(
+            verbose_println!(
                 "[BASE] Using histogram-based base: [{:.4}, {:.4}, {:.4}]",
                 histogram_estimation.medians[0],
                 histogram_estimation.medians[1],
@@ -543,7 +544,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
             return Ok(histogram_estimation);
         }
         Err(e) => {
-            eprintln!("[BASE] Histogram estimation failed: {}", e);
+            verbose_println!("[BASE] Histogram estimation failed: {}", e);
         }
     }
 
@@ -551,12 +552,12 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
     if let Some(estimation) = fallback {
         if let Some(rect) = estimation.roi {
             if let Some(candidate) = candidates.iter().find(|c| c.rect == rect) {
-                eprintln!(
+                verbose_println!(
                     "[BASE] Final fallback to {} (brightness {:.4})",
                     candidate.label, candidate.brightness
                 );
             } else {
-                eprintln!("[BASE] Final fallback to brightest ROI");
+                verbose_println!("[BASE] Final fallback to brightest ROI");
             }
         }
         Ok(estimation)
@@ -666,7 +667,7 @@ fn validate_base_candidate(
     // Check if this appears to be B&W film
     let is_bw = is_likely_bw(medians);
     if is_bw {
-        eprintln!("[BASE]   detected B&W film (low chroma), skipping orange mask validation");
+        verbose_println!("[BASE]   detected B&W film (low chroma), skipping orange mask validation");
         return (true, "B&W film - all channels similar".to_string());
     }
 
@@ -792,7 +793,7 @@ fn estimate_base_from_border(
 ) -> Result<BaseEstimation, String> {
     let sample_fraction = base_sample_fraction();
 
-    eprintln!(
+    verbose_println!(
         "[BASE] Using border method: sampling outer {:.1}% of image",
         border_percent
     );
@@ -803,12 +804,12 @@ fn estimate_base_from_border(
         return Err("Border region contains no pixels".to_string());
     }
 
-    eprintln!("[BASE] Extracted {} border pixels", border_pixels.len());
+    verbose_println!("[BASE] Extracted {} border pixels", border_pixels.len());
 
     // Filter out clipped/extreme pixels
     let filtered = filter_valid_base_pixels(border_pixels);
     let filtered_count = filtered.pixels.len();
-    eprintln!(
+    verbose_println!(
         "[BASE] After filtering clipped/extreme pixels: {} remaining ({:.0}% clipped, {:.0}% dark)",
         filtered_count,
         filtered.clipped_ratio * 100.0,
@@ -817,7 +818,7 @@ fn estimate_base_from_border(
 
     // Warn if too many pixels are clipped
     if filtered.clipped_ratio > 0.50 {
-        eprintln!(
+        verbose_println!(
             "[BASE] WARNING: >50% of border pixels are clipped - film base may be overexposed"
         );
     }
@@ -829,11 +830,11 @@ fn estimate_base_from_border(
     let (num_brightest, percentage, medians, noise_stats) =
         compute_base_stats(&filtered.pixels, sample_fraction);
 
-    eprintln!(
+    verbose_println!(
         "[BASE] Border | using {} px ({:.1}%) brightest",
         num_brightest, percentage
     );
-    eprintln!(
+    verbose_println!(
         "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
         medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
     );
@@ -849,9 +850,9 @@ fn estimate_base_from_border(
     let (valid, reason) = validate_base_candidate(&medians, &noise_stats, brightness);
 
     if valid {
-        eprintln!("[BASE]   -> border estimation accepted");
+        verbose_println!("[BASE]   -> border estimation accepted");
     } else {
-        eprintln!("[BASE]   -> border estimation has warnings: {}", reason);
+        verbose_println!("[BASE]   -> border estimation has warnings: {}", reason);
     }
 
     Ok(BaseEstimation {
@@ -933,7 +934,7 @@ fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, 
     // If this pattern isn't present, reduce confidence
     let is_color_neg_pattern = r_peak >= g_peak * 0.9 && g_peak >= b_peak * 0.9;
 
-    eprintln!(
+    verbose_println!(
         "[BASE] Histogram peaks: R={:.4}, G={:.4}, B={:.4} ({})",
         r_peak,
         g_peak,
@@ -1116,7 +1117,7 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
         ),
     ];
 
-    eprintln!(
+    verbose_println!(
         "[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
         candidates[0].0, candidates[1].0, candidates[2].0, candidates[3].0
     );
@@ -1137,7 +1138,7 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
     if center_width > 20 && center_height > 20 {
         let center_brightness =
             sample_region_brightness(image, center_x, center_y, center_width, center_height);
-        eprintln!("[BASE] Center region brightness: {:.4}", center_brightness);
+        verbose_println!("[BASE] Center region brightness: {:.4}", center_brightness);
         result.push(BaseRoiCandidate::new(
             (center_x, center_y, center_width, center_height),
             center_brightness,
