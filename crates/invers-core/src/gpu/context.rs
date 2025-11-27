@@ -20,6 +20,8 @@ pub enum GpuError {
     PipelineError(String),
     /// GPU execution failed
     ExecutionError(String),
+    /// Other GPU-related error
+    Other(String),
 }
 
 impl std::fmt::Display for GpuError {
@@ -31,6 +33,7 @@ impl std::fmt::Display for GpuError {
             GpuError::BufferError(e) => write!(f, "Buffer operation failed: {}", e),
             GpuError::PipelineError(e) => write!(f, "Pipeline creation failed: {}", e),
             GpuError::ExecutionError(e) => write!(f, "GPU execution failed: {}", e),
+            GpuError::Other(e) => write!(f, "GPU error: {}", e),
         }
     }
 }
