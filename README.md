@@ -16,12 +16,31 @@ A professional-grade film negative to positive conversion tool written in Rust. 
 
 ## Installation
 
-### Prerequisites
+### Homebrew (macOS and Linux)
+
+The easiest way to install invers is via Homebrew:
+
+```bash
+brew install narrowstacks/invers/invers
+```
+
+This installs pre-built binaries for:
+
+- macOS (Intel and Apple Silicon)
+- Linux (x86_64)
+
+GUI is not yet packaged, as it's not finished!
+
+### Building from Source
+
+If you prefer to build from source or need a platform not covered by Homebrew:
+
+#### Prerequisites
 
 - Rust 1.70 or later
 - Cargo (included with Rust)
 
-### Building from Source
+#### Build
 
 ```bash
 # Clone the repository
@@ -31,19 +50,12 @@ cd invers
 # Build release version (recommended)
 cargo build --release
 
-# The binary will be at ./target/release/invers-cli
+# The binary will be at ./target/release/invers
 ```
 
-### Build Options
+#### Other Build Commands
 
 ```bash
-# Build entire workspace
-cargo build --release
-
-# Build specific crate
-cargo build --release -p invers-cli
-cargo build --release -p invers-core
-
 # Run tests
 cargo test
 
@@ -63,37 +75,36 @@ cargo clippy
 
 ```bash
 # Convert a single negative with automatic settings
-./target/release/invers-cli convert negative.tif
+invers convert negative.tif
 
 # Convert with a specific film preset
-./target/release/invers-cli convert negative.tif \
-  --preset profiles/film/generic-color-negative.yml
+invers convert negative.tif --preset profiles/film/generic-color-negative.yml
 
 # Specify output location
-./target/release/invers-cli convert negative.tif --out ./converted/
+invers convert negative.tif --out ./converted/
 ```
 
 ### Analyze Film Base
 
 ```bash
 # Auto-detect film base
-./target/release/invers-cli analyze-base negative.tif
+invers analyze-base negative.tif
 
 # Analyze specific region (x,y,width,height)
-./target/release/invers-cli analyze-base negative.tif --roi 100,100,500,500
+invers analyze-base negative.tif --roi 100,100,500,500
 
 # Save base estimation for reuse
-./target/release/invers-cli analyze-base negative.tif --save base.yml
+invers analyze-base negative.tif --save base.yml
 ```
 
 ### Batch Processing
 
 ```bash
 # Process multiple files
-./target/release/invers-cli batch *.tif --out ./converted/
+invers batch *.tif --out ./converted/
 
 # Batch with preset and parallel threads
-./target/release/invers-cli batch *.tif \
+invers batch *.tif \
   --preset profiles/film/fuji-superia-400.yml \
   --threads 8 \
   --out ./converted/
@@ -103,21 +114,21 @@ cargo clippy
 
 ```bash
 # List available presets
-./target/release/invers-cli preset list --dir profiles/film
+invers preset list --dir profiles/film
 
 # Show preset details
-./target/release/invers-cli preset show generic-color-negative
+invers preset show generic-color-negative
 
 # Create new preset template
-./target/release/invers-cli preset create my-film --dir ./presets/
+invers preset create my-film --dir ./presets/
 ```
 
 ## CLI Reference
 
 ### `convert` - Convert Negative to Positive
 
-```
-invers-cli convert [OPTIONS] <INPUT>
+```text
+invers convert [OPTIONS] <INPUT>
 
 Arguments:
   <INPUT>  Input negative image file
@@ -137,8 +148,8 @@ Options:
 
 ### `analyze-base` - Analyze Film Base
 
-```
-invers-cli analyze-base [OPTIONS] <INPUT>
+```text
+invers analyze-base [OPTIONS] <INPUT>
 
 Arguments:
   <INPUT>  Input negative image file
@@ -151,8 +162,8 @@ Options:
 
 ### `batch` - Batch Process Files
 
-```
-invers-cli batch [OPTIONS] <INPUTS>...
+```text
+invers batch [OPTIONS] <INPUTS>...
 
 Arguments:
   <INPUTS>...  Input negative image files
@@ -167,8 +178,8 @@ Options:
 
 ### `preset` - Manage Presets
 
-```
-invers-cli preset <COMMAND>
+```text
+invers preset <COMMAND>
 
 Commands:
   list    List available presets
@@ -180,7 +191,7 @@ Commands:
 
 The conversion pipeline processes images through these stages:
 
-```
+```text
 Input Image (TIFF/PNG)
         │
         ▼
@@ -242,24 +253,24 @@ color_matrix:
   - [-0.02, 1.05, -0.03]
   - [-0.08, -0.03, 1.15]
 tone_curve:
-  curve_type: "asymmetric"  # linear, s-curve, or asymmetric
+  curve_type: "asymmetric" # linear, s-curve, or asymmetric
   strength: 0.4
-  toe_strength: 0.4         # Shadow lift (0.0-1.0)
-  shoulder_strength: 0.3    # Highlight compression (0.0-1.0)
-  toe_length: 0.25          # Where toe region extends
-  shoulder_start: 0.75      # Where shoulder begins
+  toe_strength: 0.4 # Shadow lift (0.0-1.0)
+  shoulder_strength: 0.3 # Highlight compression (0.0-1.0)
+  toe_length: 0.25 # Where toe region extends
+  shoulder_start: 0.75 # Where shoulder begins
 notes: "General-purpose color negative preset"
 ```
 
 ### Included Presets
 
-| Preset | Description |
-|--------|-------------|
-| `generic-color-negative.yml` | General-purpose color negative |
+| Preset                                  | Description                          |
+| --------------------------------------- | ------------------------------------ |
+| `generic-color-negative.yml`            | General-purpose color negative       |
 | `generic-color-negative-asymmetric.yml` | Color negative with asymmetric curve |
-| `generic-bw.yml` | Black & white negative |
-| `fuji-superia-400.yml` | Fuji Superia 400 specific |
-| `optimized-standard.yml` | Optimized general-purpose |
+| `generic-bw.yml`                        | Black & white negative               |
+| `fuji-superia-400.yml`                  | Fuji Superia 400 specific            |
+| `optimized-standard.yml`                | Optimized general-purpose            |
 
 ### Tone Curve Types
 
@@ -292,7 +303,7 @@ highlight_compression: 0.95
 
 ## Project Structure
 
-```
+```text
 invers/
 ├── crates/
 │   ├── invers-core/     # Core conversion library
@@ -357,11 +368,13 @@ invers/
 ## Supported Formats
 
 ### Input
+
 - TIFF (8-bit, 16-bit, 32-bit)
 - PNG (8-bit, 16-bit)
 - RAW formats (planned: CR2, CR3, NEF, ARW, etc.)
 
 ### Output
+
 - TIFF16 (16-bit linear)
 - Linear DNG (planned)
 
@@ -392,4 +405,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Built with Rust and the amazing ecosystem of image processing crates
-- Inspired by professional film scanning workflows and tools like Grain2Pixel
+- Inspired by professional film scanning workflows and tools like Grain2Pixel and NegativeLabPro.

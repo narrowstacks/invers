@@ -9,8 +9,8 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Aaron Anderson"]
-license = "MIT OR Apache-2.0"
+authors = ["Aaron F. Anderson"]
+license = "MIT"
 repository = "https://github.com/narrowstacks/invers"
 homepage = "https://github.com/narrowstacks/invers"
 description = "A professional-grade film negative to positive conversion tool"

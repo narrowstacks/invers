@@ -7,6 +7,7 @@ This document describes how to create a new release and publish it to Homebrew.
 1. Ensure all changes are merged to `main`
 2. Update version in `Cargo.toml` workspace section
 3. Ensure CI passes on `main`
+4. Have the homebrew tap repo cloned at `~/GitHub/homebrew-invers`
 
 ## Creating a Release
 
@@ -43,36 +44,26 @@ This triggers the release workflow which:
 
 Monitor the [Actions tab](https://github.com/narrowstacks/invers/actions) to ensure the release workflow completes successfully.
 
-## Publishing to Homebrew
+### 4. Update Homebrew Formula
 
-### Initial Setup (One-time)
-
-1. Create a new repository: `narrowstacks/homebrew-invers`
-2. Copy `Formula/invers.rb` to the new repo
-
-### Updating the Formula
-
-After the GitHub release is created:
+Once the release is published:
 
 ```bash
-# Update the formula with correct SHA256 hashes
 ./scripts/update-formula.sh vX.Y.Z
-
-# Review the changes
-cat Formula/invers.rb
 ```
 
-Then copy the updated formula to your homebrew tap:
+This script will:
+1. Fetch SHA256 checksums from the GitHub release
+2. Update the formula in the homebrew-invers tap
+3. Commit and push the changes
+
+If your tap repo is in a different location, set the environment variable:
 
 ```bash
-cp Formula/invers.rb /path/to/homebrew-invers/Formula/
-cd /path/to/homebrew-invers
-git add Formula/invers.rb
-git commit -m "Update invers to X.Y.Z"
-git push
+TAP_REPO_PATH=/path/to/homebrew-invers ./scripts/update-formula.sh vX.Y.Z
 ```
 
-### Installing via Homebrew
+## Installing via Homebrew
 
 Users can install invers with:
 
@@ -83,7 +74,7 @@ brew tap narrowstacks/invers
 # Install
 brew install invers
 
-# Or install directly
+# Or install directly without adding tap
 brew install narrowstacks/invers/invers
 ```
 
@@ -96,6 +87,11 @@ We follow [Semantic Versioning](https://semver.org/):
 - **PATCH** (0.0.X): Bug fixes, backwards compatible
 
 Pre-release versions use suffixes: `v0.1.0-alpha`, `v0.1.0-beta`, `v0.1.0-rc1`
+
+## Repository Structure
+
+- **narrowstacks/invers** - Main project repository
+- **narrowstacks/homebrew-invers** - Homebrew tap (contains only the formula)
 
 ## Troubleshooting
 
@@ -111,15 +107,14 @@ Pre-release versions use suffixes: `v0.1.0-alpha`, `v0.1.0-beta`, `v0.1.0-rc1`
    git push origin :refs/tags/vX.Y.Z
    ```
 
-### Homebrew formula not working
+### Formula update script fails
 
-Test the formula locally:
+- Ensure the release exists and all artifacts were uploaded
+- Check that the tap repo is cloned: `ls ~/GitHub/homebrew-invers`
+- Verify you have push access to the tap repo
 
-```bash
-brew install --build-from-source Formula/invers.rb
-```
+### Users report installation issues
 
-Check for:
-- Incorrect SHA256 hashes
-- Missing dependencies
-- Binary name mismatch
+1. Verify the formula: `brew audit --strict narrowstacks/invers/invers`
+2. Test installation: `brew install --verbose narrowstacks/invers/invers`
+3. Check SHA256 hashes match the release artifacts
