@@ -17,7 +17,8 @@
       "Bash(gh repo create:*)",
       "Bash(cargo clean:*)",
       "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers convert:*)",
-      "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers batch:*)"
+      "Bash(/Users/aaronanderson/GitHub/invers/target/release/invers batch:*)",
+      "Bash(gh release:*)"
     ],
     "deny": [],
     "ask": []
