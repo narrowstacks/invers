@@ -6,7 +6,7 @@ use eframe::egui;
 use invers_cli::determine_output_path;
 use invers_core::{
     decoders::{decode_image, DecodedImage},
-    models::{BaseEstimation, ConvertOptions, FilmPreset, OutputFormat, ToneCurveParams},
+    models::{BaseEstimation, ConvertOptions, FilmPreset, MaskProfile, OutputFormat, ToneCurveParams},
     pipeline::{estimate_base, process_image, ProcessedImage},
 };
 use std::path::PathBuf;
@@ -303,11 +303,14 @@ impl InversApp {
         };
 
         // Build base estimation from current parameters
+        let medians = [self.base_r, self.base_g, self.base_b];
+        let mask_profile = MaskProfile::from_base_medians(&medians);
         let base = BaseEstimation {
             roi: None,
-            medians: [self.base_r, self.base_g, self.base_b],
+            medians,
             noise_stats: None,
             auto_estimated: false,
+            mask_profile: Some(mask_profile),
         };
 
         // Build film preset with current parameters
@@ -408,11 +411,14 @@ impl InversApp {
         };
 
         // Build base estimation from current parameters
+        let medians = [self.base_r, self.base_g, self.base_b];
+        let mask_profile = MaskProfile::from_base_medians(&medians);
         let base = BaseEstimation {
             roi: None,
-            medians: [self.base_r, self.base_g, self.base_b],
+            medians,
             noise_stats: None,
             auto_estimated: false,
+            mask_profile: Some(mask_profile),
         };
 
         // Build film preset with current parameters

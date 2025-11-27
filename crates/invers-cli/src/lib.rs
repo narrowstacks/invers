@@ -128,20 +128,27 @@ pub fn determine_output_path(
 
 /// Parse inversion mode from string
 ///
-/// Supported values: "linear" (default), "log"/"logarithmic", "divide-blend"
+/// Supported values:
+/// - "mask-aware" / "mask" (default): Orange mask-aware inversion for color negative film
+/// - "linear": Simple (base - negative) / base inversion
+/// - "log" / "logarithmic": Density-based inversion
+/// - "divide-blend" / "divide": Photoshop-style divide blend mode
 pub fn parse_inversion_mode(
     mode_str: Option<&str>,
 ) -> Result<Option<invers_core::models::InversionMode>, String> {
     match mode_str {
         None => Ok(None), // Use default from config
         Some(s) => match s.to_lowercase().as_str() {
+            "mask-aware" | "mask" | "maskaware" => {
+                Ok(Some(invers_core::models::InversionMode::MaskAware))
+            }
             "linear" => Ok(Some(invers_core::models::InversionMode::Linear)),
             "log" | "logarithmic" => Ok(Some(invers_core::models::InversionMode::Logarithmic)),
             "divide-blend" | "divide" => {
                 Ok(Some(invers_core::models::InversionMode::DivideBlend))
             }
             _ => Err(format!(
-                "Unknown inversion mode: '{}'. Valid options: linear, log, divide-blend",
+                "Unknown inversion mode: '{}'. Valid options: mask-aware (default), linear, log, divide-blend",
                 s
             )),
         },

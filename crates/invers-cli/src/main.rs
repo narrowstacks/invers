@@ -72,7 +72,11 @@ enum Commands {
         #[arg(long, value_name = "FLOAT", default_value = "1.0")]
         exposure: f32,
 
-        /// Inversion mode: "linear" (default), "log", or "divide-blend"
+        /// Inversion mode: "mask-aware" (default), "linear", "log", or "divide-blend"
+        /// - mask-aware: Orange mask-aware inversion for color negative film (recommended)
+        /// - linear: Simple (base - negative) / base inversion
+        /// - log: Density-based logarithmic inversion
+        /// - divide-blend: Photoshop-style divide blend mode with gamma
         #[arg(long, value_name = "MODE")]
         inversion: Option<String>,
 
@@ -506,11 +510,15 @@ fn cmd_convert(
                 base_rgb[0], base_rgb[1], base_rgb[2]
             );
         }
+        // Auto-detect mask profile from manual base values
+        let mask_profile =
+            invers_core::models::MaskProfile::from_base_medians(&base_rgb);
         invers_core::models::BaseEstimation {
             roi: None,
             medians: base_rgb,
             noise_stats: None,
             auto_estimated: false,
+            mask_profile: Some(mask_profile),
         }
     } else {
         // Parse ROI if provided

@@ -257,7 +257,11 @@ pub fn process_image(
     // Step 4: Apply color correction matrix (unless skipped)
     // Apply color matrix BEFORE tone curve to correct film dye characteristics in linear space
     // In no-clip mode, skip color matrix as it can push values outside range
-    if !options.skip_color_matrix && !options.no_clip {
+    // In MaskAware mode, skip color matrix as the mask correction handles color balance
+    let skip_matrix_for_mask_aware =
+        options.inversion_mode == crate::models::InversionMode::MaskAware;
+
+    if !options.skip_color_matrix && !options.no_clip && !skip_matrix_for_mask_aware {
         if let Some(preset) = &options.film_preset {
             apply_color_matrix(&mut data, &preset.color_matrix, channels);
 
@@ -272,6 +276,8 @@ pub fn process_image(
     } else if options.debug {
         if options.no_clip {
             eprintln!("[DEBUG] Color matrix skipped (no-clip mode)");
+        } else if skip_matrix_for_mask_aware {
+            eprintln!("[DEBUG] Color matrix skipped (MaskAware mode handles color balance)");
         } else {
             eprintln!("[DEBUG] Color matrix skipped");
         }
@@ -435,11 +441,15 @@ fn estimate_base_from_manual_roi(
         verbose_println!("[BASE]   -> accepted");
     }
 
+    // Auto-detect mask profile from base color ratios
+    let mask_profile = crate::models::MaskProfile::from_base_medians(&medians);
+
     Ok(BaseEstimation {
         roi: Some(rect),
         medians,
         noise_stats: Some(noise_stats),
         auto_estimated: false,
+        mask_profile: Some(mask_profile),
     })
 }
 
@@ -593,6 +603,9 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
 
         let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
 
+        // Auto-detect mask profile from base color ratios
+        let mask_profile = crate::models::MaskProfile::from_base_medians(&medians);
+
         if valid {
             verbose_println!("[BASE]   -> accepted {} candidate", candidate.label);
             return Ok(BaseEstimation {
@@ -600,6 +613,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
                 medians,
                 noise_stats: Some(noise_stats),
                 auto_estimated: true,
+                mask_profile: Some(mask_profile),
             });
         } else {
             verbose_println!("[BASE]   -> rejected: {}", reason);
@@ -609,6 +623,7 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
                     medians,
                     noise_stats: Some(noise_stats),
                     auto_estimated: true,
+                    mask_profile: Some(mask_profile),
                 });
             }
         }
@@ -938,11 +953,15 @@ fn estimate_base_from_border(
         verbose_println!("[BASE]   -> border estimation has warnings: {}", reason);
     }
 
+    // Auto-detect mask profile from base color ratios
+    let mask_profile = crate::models::MaskProfile::from_base_medians(&medians);
+
     Ok(BaseEstimation {
         roi: None, // Border method doesn't use a specific ROI
         medians,
         noise_stats: Some(noise_stats),
         auto_estimated: true,
+        mask_profile: Some(mask_profile),
     })
 }
 
@@ -1029,11 +1048,16 @@ fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, 
         }
     );
 
+    // Auto-detect mask profile from base color ratios
+    let medians = [r_peak, g_peak, b_peak];
+    let mask_profile = crate::models::MaskProfile::from_base_medians(&medians);
+
     Ok(BaseEstimation {
         roi: None,
-        medians: [r_peak, g_peak, b_peak],
+        medians,
         noise_stats: None, // Histogram method doesn't compute noise
         auto_estimated: true,
+        mask_profile: Some(mask_profile),
     })
 }
 
@@ -1342,6 +1366,65 @@ pub fn invert_negative(
                 pixel[0] = 1.0 - gamma_r;
                 pixel[1] = 1.0 - gamma_g;
                 pixel[2] = 1.0 - gamma_b;
+            }
+        }
+        crate::models::InversionMode::MaskAware => {
+            // Orange mask-aware inversion for color negative film.
+            //
+            // This mode properly accounts for the orange mask that exists in color
+            // negative film due to dye impurities. The mask adds constant dye to
+            // shadows (clear areas of the negative). When inverted naively, these
+            // orange shadows become light blue instead of true black.
+            //
+            // Algorithm from Observable notebook "Why is Color Negative Film Orange?"
+            // by Evan Dorsky (https://observablehq.com/@dorskyee/understanding-color-film)
+            //
+            // Steps:
+            // 1. Perform standard inversion: 1.0 - (pixel / base)
+            // 2. Calculate per-channel shadow floor from mask characteristics
+            // 3. Apply shadow correction: corrected = (value - floor) / (1 - floor)
+
+            // Get mask profile (auto-detected or use default)
+            let mask_profile = base
+                .mask_profile
+                .clone()
+                .unwrap_or_else(crate::models::MaskProfile::default);
+
+            // Calculate shadow floor values
+            let (_red_floor, green_floor, blue_floor) = mask_profile.calculate_shadow_floors();
+
+            if options.debug {
+                eprintln!(
+                    "[DEBUG] MaskAware inversion: magenta_impurity={:.3}, cyan_impurity={:.3}",
+                    mask_profile.magenta_impurity, mask_profile.cyan_impurity
+                );
+                eprintln!(
+                    "[DEBUG] Shadow floors: green={:.4}, blue={:.4}",
+                    green_floor, blue_floor
+                );
+            }
+
+            // Step 1: Standard inversion with division (similar to DivideBlend but without gamma)
+            for pixel in data.chunks_exact_mut(3) {
+                pixel[0] = 1.0 - (pixel[0] / base_r);
+                pixel[1] = 1.0 - (pixel[1] / base_g);
+                pixel[2] = 1.0 - (pixel[2] / base_b);
+            }
+
+            // Step 2: Apply per-channel shadow correction
+            // This removes the blue cast by shifting the shadow floor to black
+            // Red channel: no correction needed (yellow coupler doesn't absorb red)
+            // Green channel: compensate for cyan's green absorption
+            // Blue channel: compensate for magenta's blue absorption
+            for pixel in data.chunks_exact_mut(3) {
+                // Green correction
+                if green_floor > 0.0 {
+                    pixel[1] = (pixel[1] - green_floor) / (1.0 - green_floor);
+                }
+                // Blue correction
+                if blue_floor > 0.0 {
+                    pixel[2] = (pixel[2] - blue_floor) / (1.0 - blue_floor);
+                }
             }
         }
     }
