@@ -13,7 +13,8 @@
       "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/lux-01 002.tiff\" )",
       "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/seattle-01 002_neg.tif\" )",
       "Bash(chmod:*)",
-      "Bash(./target/release/invers:*)"
+      "Bash(./target/release/invers:*)",
+      "Bash(gh repo create:*)"
     ],
     "deny": [],
     "ask": []
