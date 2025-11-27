@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "invers-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "invers-core",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "invers-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytemuck",
  "dirs",
@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "invers-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "eframe",
  "egui",

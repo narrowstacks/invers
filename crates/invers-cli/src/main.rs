@@ -416,9 +416,16 @@ fn cmd_convert(
     }
     let decoded = invers_core::decoders::decode_image(&input)?;
     if !silent {
+        let color_mode = if decoded.source_is_grayscale {
+            "grayscale"
+        } else if decoded.is_monochrome {
+            "RGB (monochrome)"
+        } else {
+            "RGB"
+        };
         println!(
-            "  Image: {}x{}, {} channels",
-            decoded.width, decoded.height, decoded.channels
+            "  Image: {}x{}, {} channels ({})",
+            decoded.width, decoded.height, decoded.channels, color_mode
         );
     }
 
@@ -516,8 +523,20 @@ fn cmd_convert(
     // GPU is enabled by default, --cpu forces CPU-only processing
     let use_gpu = !cpu_only;
 
+    // Auto-detect B&W mode for grayscale/monochrome images (unless user specified a mode)
+    let effective_inversion_mode = if inversion_mode.is_none()
+        && (decoded.source_is_grayscale || decoded.is_monochrome)
+    {
+        if !silent {
+            println!("  Detected B&W image, using BlackAndWhite inversion mode");
+        }
+        Some(invers_core::models::InversionMode::BlackAndWhite)
+    } else {
+        inversion_mode
+    };
+
     // Build conversion options using shared utility (with sensible defaults)
-    let options = build_convert_options_full_with_gpu(
+    let mut options = build_convert_options_full_with_gpu(
         input.clone(),
         output_dir,
         &export,
@@ -528,7 +547,7 @@ fn cmd_convert(
         no_tonecurve,
         no_colormatrix,
         exposure,
-        inversion_mode,
+        effective_inversion_mode,
         false, // no_auto_levels - use default (enabled)
         false, // preserve_headroom - use default
         false, // no_clip - use default
@@ -537,22 +556,40 @@ fn cmd_convert(
         use_gpu,
     )?;
 
+    // Check if we're using B&W mode (auto-detected or user-specified)
+    let using_bw_mode = effective_inversion_mode
+        == Some(invers_core::models::InversionMode::BlackAndWhite);
+
+    // For B&W images/mode, disable color-specific operations
+    if decoded.source_is_grayscale || decoded.is_monochrome || using_bw_mode {
+        options.enable_auto_color = false;
+        options.enable_auto_wb = false;
+        options.skip_color_matrix = true;
+    }
+
     // Process image
     if !silent {
         println!("Processing image...");
     }
-    let processed = invers_core::pipeline::process_image(decoded, &options)?;
+    let mut processed = invers_core::pipeline::process_image(decoded, &options)?;
+
+    // Force grayscale export if B&W mode was used (even on RGB source)
+    if using_bw_mode {
+        processed.export_as_grayscale = true;
+    }
 
     // Export
     if !silent {
-        println!(
-            "Exporting to {}...",
-            if options.output_format == invers_core::models::OutputFormat::Tiff16 {
-                "TIFF16"
+        let format_str = if options.output_format == invers_core::models::OutputFormat::Tiff16 {
+            if processed.export_as_grayscale {
+                "TIFF16 (grayscale)"
             } else {
-                "DNG"
+                "TIFF16"
             }
-        );
+        } else {
+            "DNG"
+        };
+        println!("Exporting to {}...", format_str);
     }
     match options.output_format {
         invers_core::models::OutputFormat::Tiff16 => {

@@ -249,8 +249,10 @@ pub struct InversionParams {
     pub base_b: f32,
     pub green_floor: f32,
     pub blue_floor: f32,
+    /// Headroom for B&W mode: fraction of base to preserve as shadow detail (e.g., 0.05 = 5%)
+    pub bw_headroom: f32,
     pub pixel_count: u32,
-    pub _padding: [u32; 2],
+    pub _padding: u32,
 }
 
 /// Tone curve parameters for uniform buffer.

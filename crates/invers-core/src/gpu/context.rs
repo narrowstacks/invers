@@ -45,6 +45,7 @@ pub struct GpuPipelines {
     pub inversion_log: wgpu::ComputePipeline,
     pub inversion_divide: wgpu::ComputePipeline,
     pub inversion_mask_aware: wgpu::ComputePipeline,
+    pub inversion_bw: wgpu::ComputePipeline,
 
     // Tone curve pipelines
     pub tone_curve_scurve: wgpu::ComputePipeline,
@@ -405,6 +406,15 @@ impl GpuContext {
                 cache: None,
             });
 
+        let inversion_bw = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("inversion_bw"),
+            layout: Some(&storage_uniform_pipeline_layout),
+            module: &inversion_module,
+            entry_point: Some("invert_bw"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         let tone_curve_scurve = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("tone_curve_scurve"),
             layout: Some(&storage_uniform_pipeline_layout),
@@ -529,6 +539,7 @@ impl GpuContext {
             inversion_log,
             inversion_divide,
             inversion_mask_aware,
+            inversion_bw,
             tone_curve_scurve,
             tone_curve_asymmetric,
             color_matrix,

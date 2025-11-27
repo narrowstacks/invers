@@ -3,10 +3,19 @@
 
 const NUM_BUCKETS: u32 = 65536u;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
 @group(0) @binding(0) var<storage, read> pixels: array<f32>;
 @group(0) @binding(1) var<storage, read_write> histogram_r: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read_write> histogram_g: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> histogram_b: array<atomic<u32>>;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
 
 // Convert float value to histogram bucket index
 fn value_to_bucket(value: f32) -> u32 {
@@ -17,9 +26,12 @@ fn value_to_bucket(value: f32) -> u32 {
 // Accumulate histogram using global atomics
 // Each thread processes one pixel
 @compute @workgroup_size(256)
-fn accumulate_histogram(@builtin(global_invocation_id) id: vec3<u32>) {
+fn accumulate_histogram(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
     let pixel_count = arrayLength(&pixels) / 3u;
-    let pixel_idx = id.x;
+    let pixel_idx = get_pixel_index(id, num_workgroups);
 
     if (pixel_idx >= pixel_count) {
         return;

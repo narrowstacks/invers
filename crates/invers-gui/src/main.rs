@@ -1115,6 +1115,8 @@ fn downsample_image(image: &DecodedImage, max_dimension: u32) -> DecodedImage {
         black_level: image.black_level,
         white_level: image.white_level,
         color_matrix: image.color_matrix,
+        source_is_grayscale: image.source_is_grayscale,
+        is_monochrome: image.is_monochrome,
     }
 }
 

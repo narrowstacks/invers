@@ -21,6 +21,15 @@ struct HslAdjustParams {
 @group(0) @binding(0) var<storage, read_write> pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: DummyParams;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
+
 // Color range centers in degrees
 const COLOR_CENTERS: array<f32, 8> = array<f32, 8>(
     0.0,    // Red
@@ -114,9 +123,12 @@ fn hsl_to_rgb_impl(h: f32, s: f32, l: f32) -> vec3<f32> {
 
 // Convert RGB to HSL (in-place)
 @compute @workgroup_size(256)
-fn rgb_to_hsl(@builtin(global_invocation_id) id: vec3<u32>) {
+fn rgb_to_hsl(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
     let pixel_count = params.pixel_count;
-    let pixel_idx = id.x;
+    let pixel_idx = get_pixel_index(id, num_workgroups);
 
     if (pixel_idx >= pixel_count) {
         return;
@@ -137,9 +149,12 @@ fn rgb_to_hsl(@builtin(global_invocation_id) id: vec3<u32>) {
 
 // Convert HSL to RGB (in-place)
 @compute @workgroup_size(256)
-fn hsl_to_rgb(@builtin(global_invocation_id) id: vec3<u32>) {
+fn hsl_to_rgb(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
     let pixel_count = params.pixel_count;
-    let pixel_idx = id.x;
+    let pixel_idx = get_pixel_index(id, num_workgroups);
 
     if (pixel_idx >= pixel_count) {
         return;
@@ -236,9 +251,12 @@ fn get_color_weights(hue: f32) -> vec3<f32> {
 
 // Apply 8-color HSL adjustments (Camera Raw style)
 @compute @workgroup_size(256)
-fn apply_hsl_adjustments(@builtin(global_invocation_id) id: vec3<u32>) {
+fn apply_hsl_adjustments(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
     let pixel_count = hsl_params.pixel_count;
-    let pixel_idx = id.x;
+    let pixel_idx = get_pixel_index(id, num_workgroups);
 
     if (pixel_idx >= pixel_count) {
         return;

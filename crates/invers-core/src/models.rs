@@ -598,6 +598,17 @@ pub enum InversionMode {
     /// 4. Automatically skips color matrix (no longer needed)
     #[default]
     MaskAware,
+
+    /// Simple B&W inversion for grayscale or monochrome images.
+    ///
+    /// This mode is optimized for black and white film:
+    /// 1. Simple inversion: 1.0 - (pixel / base)
+    /// 2. Sets black point slightly below the film base (with headroom)
+    /// 3. Skips color-specific operations (color matrix, auto-color, etc.)
+    ///
+    /// The headroom parameter (default 5%) preserves shadow detail by not
+    /// clipping the film base completely to black.
+    BlackAndWhite,
 }
 
 /// Shadow lift mode

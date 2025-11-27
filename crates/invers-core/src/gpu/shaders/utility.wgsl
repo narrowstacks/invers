@@ -15,11 +15,23 @@ struct UtilityParams {
 const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
 const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
+
 // Clamp values to working range
 // param1, param2, param3: unused
 @compute @workgroup_size(256)
-fn clamp_range(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn clamp_range(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -36,8 +48,11 @@ fn clamp_range(@builtin(global_invocation_id) id: vec3<u32>) {
 // param2: max_value (for clamping, use 1.0 for normal, higher for no-clip mode)
 // param3: unused
 @compute @workgroup_size(256)
-fn exposure_multiply(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn exposure_multiply(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -56,8 +71,11 @@ fn exposure_multiply(@builtin(global_invocation_id) id: vec3<u32>) {
 // param2: unused
 // param3: unused
 @compute @workgroup_size(256)
-fn shadow_lift(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn shadow_lift(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -75,8 +93,11 @@ fn shadow_lift(@builtin(global_invocation_id) id: vec3<u32>) {
 // param2: compression factor (0.0 = full compress, 1.0 = no compress)
 // param3: unused
 @compute @workgroup_size(256)
-fn highlight_compress(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn highlight_compress(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -99,8 +120,11 @@ fn highlight_compress(@builtin(global_invocation_id) id: vec3<u32>) {
 // param2: offset_g
 // param3: offset_b
 @compute @workgroup_size(256)
-fn apply_base_offsets(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn apply_base_offsets(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }

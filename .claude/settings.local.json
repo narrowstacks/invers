@@ -22,7 +22,11 @@
       "Bash(cargo test:*)",
       "Bash(cargo run:*)",
       "Bash(time ./target/release/invers convert:*)",
-      "Bash(magick compare:*)"
+      "Bash(magick compare:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(identify:*)",
+      "Bash(magick:*)"
     ],
     "deny": [],
     "ask": []

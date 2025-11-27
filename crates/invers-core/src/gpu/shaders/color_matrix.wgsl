@@ -23,11 +23,23 @@ struct GainParams {
 @group(0) @binding(0) var<storage, read_write> pixels: array<f32>;
 @group(0) @binding(1) var<uniform> matrix_params: ColorMatrixParams;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
+
 // Apply 3x3 color matrix to RGB pixels
 // output = matrix × input
 @compute @workgroup_size(256)
-fn apply_color_matrix(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn apply_color_matrix(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= matrix_params.pixel_count) {
         return;
     }
@@ -58,8 +70,11 @@ fn apply_color_matrix(@builtin(global_invocation_id) id: vec3<u32>) {
 // output = (input + offset) * gain
 // Used for auto-levels, auto-color, auto-exposure application
 @compute @workgroup_size(256)
-fn apply_gains(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn apply_gains(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= gain_params.pixel_count) {
         return;
     }

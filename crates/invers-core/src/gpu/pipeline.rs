@@ -41,11 +41,15 @@ pub fn process_image_gpu(
     // Download result
     let result_data = gpu_image.download()?;
 
+    // Track if we should export as grayscale
+    let export_as_grayscale = decoded.source_is_grayscale || decoded.is_monochrome;
+
     Ok(ProcessedImage {
         width: decoded.width,
         height: decoded.height,
         data: result_data,
         channels: decoded.channels,
+        export_as_grayscale,
     })
 }
 
@@ -208,6 +212,9 @@ fn execute_pipeline(
 // Individual operation implementations
 // ============================================================================
 
+/// Default headroom for B&W mode: 5% of base value preserved as shadow detail
+const BW_DEFAULT_HEADROOM: f32 = 0.05;
+
 fn apply_inversion(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -229,8 +236,9 @@ fn apply_inversion(
         base_b: base.medians[2],
         green_floor,
         blue_floor,
+        bw_headroom: BW_DEFAULT_HEADROOM,
         pixel_count,
-        _padding: [0, 0],
+        _padding: 0,
     };
 
     let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "inversion_params");
@@ -241,6 +249,7 @@ fn apply_inversion(
         InversionMode::Logarithmic => &ctx.pipelines.inversion_log,
         InversionMode::DivideBlend => &ctx.pipelines.inversion_divide,
         InversionMode::MaskAware => &ctx.pipelines.inversion_mask_aware,
+        InversionMode::BlackAndWhite => &ctx.pipelines.inversion_bw,
     };
 
     dispatch_compute(ctx, pipeline, &image.buffer, &uniform_buffer, pixel_count)
@@ -498,8 +507,17 @@ fn accumulate_histogram(
         pass.set_bind_group(0, &bind_group, &[]);
 
         let pixel_count = image.pixel_count();
-        let workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        let total_workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+
+        // Use 2D dispatch for large images
+        let (workgroups_x, workgroups_y) = if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
+            (total_workgroups, 1)
+        } else {
+            let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
+            let other = (total_workgroups + side - 1) / side;
+            (side, other.min(MAX_WORKGROUPS_PER_DIM))
+        };
+        pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 
     ctx.submit_and_wait(encoder);
@@ -748,7 +766,14 @@ fn clamp_working_range(
 // Helper functions
 // ============================================================================
 
+/// Maximum workgroups per dimension (GPU limit)
+const MAX_WORKGROUPS_PER_DIM: u32 = 65535;
+
+/// Maximum pixels per single dispatch (65535 workgroups * 256 threads)
+const MAX_PIXELS_PER_DISPATCH: u32 = MAX_WORKGROUPS_PER_DIM * WORKGROUP_SIZE;
+
 /// Generic compute dispatch for storage + uniform pattern
+/// Handles large images by splitting into multiple dispatches when needed
 fn dispatch_compute(
     ctx: &GpuContext,
     pipeline: &wgpu::ComputePipeline,
@@ -799,26 +824,64 @@ fn dispatch_compute(
         ],
     });
 
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("compute_encoder"),
-        });
+    let total_workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("compute_pass"),
-            timestamp_writes: None,
-        });
+    // If within limits, do a single dispatch
+    if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("compute_encoder"),
+            });
 
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("compute_pass"),
+                timestamp_writes: None,
+            });
 
-        let workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        pass.dispatch_workgroups(workgroups, 1, 1);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(total_workgroups, 1, 1);
+        }
+
+        ctx.submit_and_wait(encoder);
+    } else {
+        // For large images, use 2D dispatch with both x and y dimensions
+        // This allows up to 65535 * 65535 workgroups = ~4 billion workgroups
+        // Calculate grid dimensions: try to make it roughly square for efficiency
+        let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
+        let workgroups_y = (total_workgroups + side - 1) / side;
+
+        if workgroups_y > MAX_WORKGROUPS_PER_DIM {
+            return Err(GpuError::Other(format!(
+                "Image too large: {} pixels requires {} workgroups, max supported is {}",
+                pixel_count,
+                total_workgroups,
+                MAX_WORKGROUPS_PER_DIM as u64 * MAX_WORKGROUPS_PER_DIM as u64
+            )));
+        }
+
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("compute_encoder_2d"),
+            });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("compute_pass_2d"),
+                timestamp_writes: None,
+            });
+
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(side, workgroups_y, 1);
+        }
+
+        ctx.submit_and_wait(encoder);
     }
 
-    ctx.submit_and_wait(encoder);
     Ok(())
 }
 

@@ -14,6 +14,15 @@ struct ToneCurveParams {
 @group(0) @binding(0) var<storage, read_write> pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: ToneCurveParams;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
+
 // Smoothstep function: t² × (3 - 2t)
 fn smoothstep_value(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
@@ -49,8 +58,11 @@ fn apply_scurve_point(x: f32, strength: f32) -> f32 {
 
 // S-curve tone mapping (symmetric around midpoint)
 @compute @workgroup_size(256)
-fn apply_scurve(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn apply_scurve(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -93,8 +105,11 @@ fn apply_asymmetric_point(
 
 // Asymmetric tone curve with separate toe (shadow) and shoulder (highlight) control
 @compute @workgroup_size(256)
-fn apply_asymmetric(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn apply_asymmetric(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }

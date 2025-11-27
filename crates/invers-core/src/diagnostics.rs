@@ -547,6 +547,7 @@ pub fn save_diagnostic_images<P: AsRef<Path>>(
         height: our_image.height,
         data: scaled_diff,
         channels: 3,
+        export_as_grayscale: false,
     };
 
     // Save images
@@ -557,6 +558,7 @@ pub fn save_diagnostic_images<P: AsRef<Path>>(
         height: third_party.height,
         data: third_party.data.clone(),
         channels: third_party.channels,
+        export_as_grayscale: false,
     };
     export_tiff16(
         &tp_as_processed,

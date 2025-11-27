@@ -133,6 +133,7 @@ pub fn determine_output_path(
 /// - "linear": Simple (base - negative) / base inversion
 /// - "log" / "logarithmic": Density-based inversion
 /// - "divide-blend" / "divide": Photoshop-style divide blend mode
+/// - "bw" / "blackandwhite" / "grayscale": Simple B&W inversion with headroom
 pub fn parse_inversion_mode(
     mode_str: Option<&str>,
 ) -> Result<Option<invers_core::models::InversionMode>, String> {
@@ -147,8 +148,11 @@ pub fn parse_inversion_mode(
             "divide-blend" | "divide" => {
                 Ok(Some(invers_core::models::InversionMode::DivideBlend))
             }
+            "bw" | "blackandwhite" | "black-and-white" | "grayscale" | "mono" => {
+                Ok(Some(invers_core::models::InversionMode::BlackAndWhite))
+            }
             _ => Err(format!(
-                "Unknown inversion mode: '{}'. Valid options: mask-aware (default), linear, log, divide-blend",
+                "Unknown inversion mode: '{}'. Valid options: mask-aware (default), linear, log, divide-blend, bw",
                 s
             )),
         },

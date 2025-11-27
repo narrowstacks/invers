@@ -33,6 +33,10 @@ pub struct ProcessedImage {
 
     /// Number of channels
     pub channels: u8,
+
+    /// Whether to export as grayscale (single channel)
+    /// Set true for B&W images to save space (1 channel instead of 3)
+    pub export_as_grayscale: bool,
 }
 
 /// Execute the full processing pipeline
@@ -83,8 +87,13 @@ pub fn process_image(
         height,
         channels,
         mut data,
+        source_is_grayscale,
+        is_monochrome,
         ..
     } = image;
+
+    // Track if we should export as grayscale (source was grayscale or detected as monochrome)
+    let export_as_grayscale = source_is_grayscale || is_monochrome;
 
     if channels != 3 {
         return Err(format!("Pipeline requires 3-channel RGB, got {}", channels));
@@ -394,6 +403,7 @@ pub fn process_image(
         height,
         data,
         channels,
+        export_as_grayscale,
     })
 }
 
@@ -1452,6 +1462,42 @@ pub fn invert_negative(
                 if blue_floor > 0.0 {
                     pixel[2] = (pixel[2] - blue_floor) / (1.0 - blue_floor);
                 }
+            }
+        }
+        crate::models::InversionMode::BlackAndWhite => {
+            // Simple B&W inversion with headroom
+            //
+            // For grayscale/monochrome images, we do a straightforward inversion:
+            // 1. Simple inversion: base - pixel
+            // 2. Scale so that (base - headroom) maps to white (1.0)
+            //
+            // This sets the black point slightly below the film base to preserve
+            // shadow detail near the base density.
+
+            // Default 5% headroom
+            const BW_HEADROOM: f32 = 0.05;
+
+            // Use average base for B&W (all channels should be similar)
+            let base = (base_r + base_g + base_b) / 3.0;
+
+            // Effective black point: base minus headroom fraction
+            let black_point = base * (1.0 - BW_HEADROOM);
+
+            // Scale factor: 1.0 / black_point to map black_point -> 1.0
+            let scale = 1.0 / black_point.max(0.0001);
+
+            if options.debug {
+                eprintln!(
+                    "[DEBUG] B&W inversion: base={:.4}, black_point={:.4}, scale={:.4}",
+                    base, black_point, scale
+                );
+            }
+
+            for pixel in data.chunks_exact_mut(3) {
+                // Simple inversion and scale
+                pixel[0] = ((base - pixel[0]) * scale).clamp(0.0, 1.0);
+                pixel[1] = ((base - pixel[1]) * scale).clamp(0.0, 1.0);
+                pixel[2] = ((base - pixel[2]) * scale).clamp(0.0, 1.0);
             }
         }
     }

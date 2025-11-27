@@ -7,18 +7,31 @@ struct InversionParams {
     base_b: f32,
     green_floor: f32,
     blue_floor: f32,
+    bw_headroom: f32,  // Headroom for B&W mode (e.g., 0.05 = 5%)
     pixel_count: u32,
-    _padding: vec2<u32>,
+    _padding: u32,
 }
 
 @group(0) @binding(0) var<storage, read_write> pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: InversionParams;
 
+// Workgroup size for all shaders
+const WORKGROUP_SIZE: u32 = 256u;
+
+// Calculate linear pixel index from 2D dispatch grid
+// Supports images larger than 65535 workgroups by using 2D dispatch
+fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
+}
+
 // Linear inversion: positive = (base - negative) / base
 // Note: No clamping here - matches CPU behavior. Final clamping happens in utility shader.
 @compute @workgroup_size(256)
-fn invert_linear(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn invert_linear(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -41,8 +54,11 @@ fn invert_linear(@builtin(global_invocation_id) id: vec3<u32>) {
 
 // Logarithmic (density-based) inversion: positive = 10^(log10(base) - log10(negative))
 @compute @workgroup_size(256)
-fn invert_log(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn invert_log(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -76,8 +92,11 @@ fn invert_log(@builtin(global_invocation_id) id: vec3<u32>) {
 // 2. Apply gamma: gamma_result = divided^(1/2.2)
 // 3. Invert: result = 1.0 - gamma_result
 @compute @workgroup_size(256)
-fn invert_divide(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn invert_divide(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -109,8 +128,11 @@ fn invert_divide(@builtin(global_invocation_id) id: vec3<u32>) {
 // 1. Standard inversion: 1.0 - (pixel / base)
 // 2. Shadow floor correction for green and blue channels
 @compute @workgroup_size(256)
-fn invert_mask_aware(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel_idx = id.x;
+fn invert_mask_aware(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
     if (pixel_idx >= params.pixel_count) {
         return;
     }
@@ -133,6 +155,48 @@ fn invert_mask_aware(@builtin(global_invocation_id) id: vec3<u32>) {
     if (params.blue_floor > 0.0) {
         inv_b = (inv_b - params.blue_floor) / (1.0 - params.blue_floor);
     }
+
+    pixels[idx] = clamp(inv_r, 0.0, 1.0);
+    pixels[idx + 1u] = clamp(inv_g, 0.0, 1.0);
+    pixels[idx + 2u] = clamp(inv_b, 0.0, 1.0);
+}
+
+// Black & White inversion: simple inversion with black point near film base
+// Optimized for grayscale/monochrome images
+// 1. Simple inversion: base - pixel
+// 2. Scale so that (base - headroom) maps to 0 (black)
+// 3. This preserves shadow detail by not clipping the film base completely
+@compute @workgroup_size(256)
+fn invert_bw(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
+    if (pixel_idx >= params.pixel_count) {
+        return;
+    }
+
+    let idx = pixel_idx * 3u;
+    let r = pixels[idx];
+    let g = pixels[idx + 1u];
+    let b = pixels[idx + 2u];
+
+    // Use average base for B&W (all channels should be similar)
+    let base = (params.base_r + params.base_g + params.base_b) / 3.0;
+
+    // Effective black point: base minus headroom
+    // headroom is a fraction of base (e.g., 0.05 means 5% headroom)
+    let black_point = base * (1.0 - params.bw_headroom);
+
+    // Simple inversion: base - pixel, then scale
+    // When pixel = base, result = 0 (but we want some headroom)
+    // When pixel = 0, result = base (white)
+    // Scale factor: 1.0 / black_point to map black_point -> 1.0
+    let scale = 1.0 / max(black_point, 0.0001);
+
+    let inv_r = (base - r) * scale;
+    let inv_g = (base - g) * scale;
+    let inv_b = (base - b) * scale;
 
     pixels[idx] = clamp(inv_r, 0.0, 1.0);
     pixels[idx + 1u] = clamp(inv_g, 0.0, 1.0);
