@@ -236,6 +236,8 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         auto_exposure_strength: params.auto_exposure_strength,
         auto_exposure_min_gain: params.auto_exposure_min_gain,
         auto_exposure_max_gain: params.auto_exposure_max_gain,
+        no_clip: false,
+        enable_auto_wb: false,
     };
 
     // Process with our pipeline
@@ -307,6 +309,8 @@ pub fn run_parameter_test_preloaded(
         auto_exposure_strength: params.auto_exposure_strength,
         auto_exposure_min_gain: params.auto_exposure_min_gain,
         auto_exposure_max_gain: params.auto_exposure_max_gain,
+        no_clip: false,
+        enable_auto_wb: false,
     };
 
     // Process with our pipeline - clone original since process_image consumes it

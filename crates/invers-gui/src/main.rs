@@ -365,6 +365,8 @@ impl InversApp {
             auto_exposure_strength: defaults.auto_exposure_strength,
             auto_exposure_min_gain: defaults.auto_exposure_min_gain,
             auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+            no_clip: false,
+            enable_auto_wb: false,
         };
 
         // Process the image
@@ -468,6 +470,8 @@ impl InversApp {
             auto_exposure_strength: defaults.auto_exposure_strength,
             auto_exposure_min_gain: defaults.auto_exposure_min_gain,
             auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+            no_clip: false,
+            enable_auto_wb: false,
         };
 
         // Process the original full-resolution image

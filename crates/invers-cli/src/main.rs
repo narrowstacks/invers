@@ -90,6 +90,15 @@ enum Commands {
         #[arg(long)]
         preserve_headroom: bool,
 
+        /// Disable all clipping operations to preserve full dynamic range
+        /// Prevents auto-levels from stretching highlights beyond original values
+        #[arg(long)]
+        no_clip: bool,
+
+        /// Apply auto white balance correction
+        #[arg(long)]
+        auto_wb: bool,
+
         /// Enable debug output showing intermediate statistics
         #[arg(long)]
         debug: bool,
@@ -305,6 +314,8 @@ fn main() {
             base,
             no_auto_levels,
             preserve_headroom,
+            no_clip,
+            auto_wb,
             debug,
             silent,
             verbose,
@@ -326,6 +337,8 @@ fn main() {
             base,
             no_auto_levels,
             preserve_headroom,
+            no_clip,
+            auto_wb,
             debug,
             silent,
             verbose,
@@ -432,6 +445,8 @@ fn cmd_convert(
     base: Option<String>,
     no_auto_levels: bool,
     preserve_headroom: bool,
+    no_clip: bool,
+    auto_wb: bool,
     debug: bool,
     silent: bool,
     verbose: bool,
@@ -570,6 +585,12 @@ fn cmd_convert(
         if preserve_headroom {
             println!("Preserving shadow/highlight headroom");
         }
+        if no_clip {
+            println!("No-clip mode: preserving full dynamic range");
+        }
+        if auto_wb {
+            println!("Auto white balance enabled");
+        }
     }
 
     // Build conversion options using shared utility
@@ -587,6 +608,8 @@ fn cmd_convert(
         inversion_mode,
         no_auto_levels,
         preserve_headroom,
+        no_clip,
+        auto_wb,
         debug,
     )?;
 

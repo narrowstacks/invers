@@ -323,6 +323,17 @@ pub struct ConvertOptions {
     /// Maximum gain applied by auto exposure (prevents over-brightening)
     #[serde(default = "default_auto_exposure_max_gain")]
     pub auto_exposure_max_gain: f32,
+
+    /// Disable all clipping operations to preserve full dynamic range
+    /// When enabled, auto-levels will normalize without clipping,
+    /// auto-color gains will be limited to prevent exceeding 1.0,
+    /// and no clamping will be applied to output values
+    #[serde(default = "default_false")]
+    pub no_clip: bool,
+
+    /// Enable auto white balance correction
+    #[serde(default = "default_false")]
+    pub enable_auto_wb: bool,
 }
 
 // Default value functions for serde

@@ -1,9 +1,144 @@
 //! Automatic adjustment functions for image processing
 //!
-//! Provides auto-levels, auto-color, and other automatic corrections
-//! similar to Photoshop's automatic adjustment tools.
+//! Provides auto-levels, auto-color, auto white balance, and other automatic
+//! corrections similar to Photoshop's automatic adjustment tools.
 
 use std::cmp::Ordering;
+
+/// Auto white balance: Estimate and correct color temperature/tint
+///
+/// This function finds neutral/highlight areas and calculates multipliers
+/// to make them neutral gray. Unlike auto-color (which uses midtone averages),
+/// this looks at bright areas that should be white/neutral.
+///
+/// Returns [r_mult, g_mult, b_mult] - the multipliers applied
+pub fn auto_white_balance(data: &mut [f32], channels: u8, strength: f32) -> [f32; 3] {
+    if channels != 3 {
+        panic!("auto_white_balance only supports 3-channel RGB images");
+    }
+
+    // Find pixels in the highlight region (top 10% brightness)
+    // These are most likely to be neutral (sky, clouds, white objects)
+    let mut highlight_r_sum = 0.0f64;
+    let mut highlight_g_sum = 0.0f64;
+    let mut highlight_b_sum = 0.0f64;
+    let mut highlight_count = 0usize;
+
+    // Also collect "gray" pixels where R≈G≈B (likely neutral)
+    let mut gray_r_sum = 0.0f64;
+    let mut gray_g_sum = 0.0f64;
+    let mut gray_b_sum = 0.0f64;
+    let mut gray_count = 0usize;
+
+    for pixel in data.chunks_exact(3) {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // Highlight pixels (bright areas)
+        if lum > 0.6 {
+            highlight_r_sum += r as f64;
+            highlight_g_sum += g as f64;
+            highlight_b_sum += b as f64;
+            highlight_count += 1;
+        }
+
+        // Gray pixels (low saturation - channels are similar)
+        let max_ch = r.max(g).max(b);
+        let min_ch = r.min(g).min(b);
+        if max_ch > 0.1 && (max_ch - min_ch) / max_ch < 0.15 {
+            gray_r_sum += r as f64;
+            gray_g_sum += g as f64;
+            gray_b_sum += b as f64;
+            gray_count += 1;
+        }
+    }
+
+    // Prefer gray pixels if we have enough, otherwise use highlights
+    let (r_avg, g_avg, b_avg) = if gray_count > 1000 {
+        (
+            (gray_r_sum / gray_count as f64) as f32,
+            (gray_g_sum / gray_count as f64) as f32,
+            (gray_b_sum / gray_count as f64) as f32,
+        )
+    } else if highlight_count > 100 {
+        (
+            (highlight_r_sum / highlight_count as f64) as f32,
+            (highlight_g_sum / highlight_count as f64) as f32,
+            (highlight_b_sum / highlight_count as f64) as f32,
+        )
+    } else {
+        // Fallback: use overall average
+        let mut total_r = 0.0f64;
+        let mut total_g = 0.0f64;
+        let mut total_b = 0.0f64;
+        let count = data.len() / 3;
+        for pixel in data.chunks_exact(3) {
+            total_r += pixel[0] as f64;
+            total_g += pixel[1] as f64;
+            total_b += pixel[2] as f64;
+        }
+        (
+            (total_r / count as f64) as f32,
+            (total_g / count as f64) as f32,
+            (total_b / count as f64) as f32,
+        )
+    };
+
+    // Calculate multipliers to make the reference neutral
+    // We normalize to the green channel (common in photography)
+    let r_mult = if r_avg > 0.0001 { g_avg / r_avg } else { 1.0 };
+    let g_mult = 1.0; // Green is reference
+    let b_mult = if b_avg > 0.0001 { g_avg / b_avg } else { 1.0 };
+
+    // Apply with strength
+    let r_final = 1.0 + strength * (r_mult - 1.0);
+    let g_final = 1.0 + strength * (g_mult - 1.0);
+    let b_final = 1.0 + strength * (b_mult - 1.0);
+
+    // Apply multipliers
+    for pixel in data.chunks_exact_mut(3) {
+        pixel[0] *= r_final;
+        pixel[1] *= g_final;
+        pixel[2] *= b_final;
+    }
+
+    [r_final, g_final, b_final]
+}
+
+/// Auto white balance without clipping - same as auto_white_balance but scales
+/// result to preserve original max value
+pub fn auto_white_balance_no_clip(data: &mut [f32], channels: u8, strength: f32) -> [f32; 3] {
+    if channels != 3 {
+        panic!("auto_white_balance_no_clip only supports 3-channel RGB images");
+    }
+
+    // Find original max
+    let mut original_max = 0.0f32;
+    for pixel in data.chunks_exact(3) {
+        original_max = original_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    // Apply white balance
+    let multipliers = auto_white_balance(data, channels, strength);
+
+    // Find new max and scale back if needed
+    let mut new_max = 0.0f32;
+    for pixel in data.chunks_exact(3) {
+        new_max = new_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    if new_max > original_max && new_max > 0.0001 {
+        let scale = original_max / new_max;
+        for value in data.iter_mut() {
+            *value *= scale;
+        }
+        [multipliers[0] * scale, multipliers[1] * scale, multipliers[2] * scale]
+    } else {
+        multipliers
+    }
+}
 
 /// Auto-levels mode for controlling color preservation
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -71,6 +206,86 @@ impl LevelsParams {
 /// Memory usage: O(buckets * 3) instead of O(n * 3)
 pub fn auto_levels(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6] {
     auto_levels_with_mode(data, channels, clip_percent, AutoLevelsMode::PerChannel)
+}
+
+/// Auto-levels without clipping: Normalize histogram while preserving all data
+///
+/// This version:
+/// 1. Applies the same percentile-based normalization as regular auto-levels
+/// 2. Then scales the entire result so the max doesn't exceed the original max
+/// 3. This gives proper color balance while preserving all highlight detail
+///
+/// Returns [r_min, r_max, g_min, g_max, b_min, b_max] - the percentile ranges found
+pub fn auto_levels_no_clip(data: &mut [f32], channels: u8, clip_percent: f32) -> [f32; 6] {
+    if channels != 3 {
+        panic!("auto_levels_no_clip only supports 3-channel RGB images");
+    }
+
+    // Build per-channel histograms in a single pass
+    const NUM_BUCKETS: usize = 65536;
+    let mut r_hist = vec![0u32; NUM_BUCKETS];
+    let mut g_hist = vec![0u32; NUM_BUCKETS];
+    let mut b_hist = vec![0u32; NUM_BUCKETS];
+
+    // Track actual max values
+    let mut overall_actual_max = 0.0f32;
+
+    for pixel in data.chunks_exact(3) {
+        // For histogram, clamp to 0-1 for bucket calculation
+        let r_bucket =
+            ((pixel[0].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
+        let g_bucket =
+            ((pixel[1].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
+        let b_bucket =
+            ((pixel[2].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
+        r_hist[r_bucket] += 1;
+        g_hist[g_bucket] += 1;
+        b_hist[b_bucket] += 1;
+
+        // Track overall max
+        overall_actual_max = overall_actual_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    let num_pixels = data.len() / 3;
+
+    // Compute clipped percentile ranges (same as regular auto-levels)
+    let (r_min, r_clip_max) = compute_clipped_range_from_histogram(&r_hist, num_pixels, clip_percent);
+    let (g_min, g_clip_max) = compute_clipped_range_from_histogram(&g_hist, num_pixels, clip_percent);
+    let (b_min, b_clip_max) = compute_clipped_range_from_histogram(&b_hist, num_pixels, clip_percent);
+
+    // First pass: apply normalization and find the new max
+    let mut new_max = 0.0f32;
+    for pixel in data.chunks_exact_mut(3) {
+        // Normalize using clipped ranges (like regular auto-levels, but to 0-1)
+        pixel[0] = if (r_clip_max - r_min).abs() > 0.0001 {
+            (pixel[0] - r_min) / (r_clip_max - r_min)
+        } else {
+            pixel[0]
+        };
+        pixel[1] = if (g_clip_max - g_min).abs() > 0.0001 {
+            (pixel[1] - g_min) / (g_clip_max - g_min)
+        } else {
+            pixel[1]
+        };
+        pixel[2] = if (b_clip_max - b_min).abs() > 0.0001 {
+            (pixel[2] - b_min) / (b_clip_max - b_min)
+        } else {
+            pixel[2]
+        };
+
+        new_max = new_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    // Second pass: scale everything so the max equals overall_actual_max
+    // This preserves all data while giving proper color balance
+    if new_max > 0.0001 {
+        let scale = overall_actual_max / new_max;
+        for value in data.iter_mut() {
+            *value *= scale;
+        }
+    }
+
+    [r_min, r_clip_max, g_min, g_clip_max, b_min, b_clip_max]
 }
 
 /// Auto-levels with configurable mode for color preservation
@@ -375,6 +590,107 @@ const AUTO_COLOR_INITIAL_HIGH: f32 = 0.65;
 const AUTO_COLOR_EXPANSION_STEP: f32 = 0.10;
 const AUTO_COLOR_MAX_EXPANSIONS: usize = 4;
 const AUTO_COLOR_MIN_SAMPLES: usize = 512;
+
+/// Auto-color without clipping: Neutralize color casts while preserving all data
+///
+/// This version:
+/// 1. Calculates and applies the ideal color correction gains (same as regular auto-color)
+/// 2. Then scales the entire result so the max doesn't exceed the original max
+/// 3. This gives proper color balance while preserving all highlight detail
+pub fn auto_color_no_clip(
+    data: &mut [f32],
+    channels: u8,
+    strength: f32,
+    min_gain: f32,
+    max_gain: f32,
+) -> [f32; 3] {
+    if channels != 3 {
+        panic!("auto_color_no_clip only supports 3-channel RGB images");
+    }
+
+    // First pass: collect stats and find current max
+    let mut low = AUTO_COLOR_INITIAL_LOW;
+    let mut high = AUTO_COLOR_INITIAL_HIGH;
+    let mut stats = collect_channel_stats(data, low, high);
+    let mut expansions = 0;
+
+    while stats.count < AUTO_COLOR_MIN_SAMPLES
+        && expansions < AUTO_COLOR_MAX_EXPANSIONS
+        && (low > 0.0 || high < 1.0)
+    {
+        low = (low - AUTO_COLOR_EXPANSION_STEP).max(0.0);
+        high = (high + AUTO_COLOR_EXPANSION_STEP).min(1.0);
+        expansions += 1;
+        stats = collect_channel_stats(data, low, high);
+    }
+
+    if stats.count == 0 {
+        stats = collect_channel_stats(data, 0.0, 1.0);
+    }
+
+    if stats.count == 0 {
+        return [1.0, 1.0, 1.0];
+    }
+
+    // Find current overall max
+    let mut overall_max = 0.0f32;
+    for pixel in data.chunks_exact(3) {
+        overall_max = overall_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    let sample_count = stats.count as f32;
+    let r_avg = stats.r_sum / sample_count;
+    let g_avg = stats.g_sum / sample_count;
+    let b_avg = stats.b_sum / sample_count;
+
+    let target_gray = (r_avg + g_avg + b_avg) / 3.0;
+
+    // Calculate ideal adjustment factors (same as regular auto-color)
+    let clamp_gain = |value: f32| value.clamp(min_gain, max_gain);
+
+    let r_ideal = if r_avg > 0.0001 {
+        clamp_gain(target_gray / r_avg)
+    } else {
+        1.0
+    };
+    let g_ideal = if g_avg > 0.0001 {
+        clamp_gain(target_gray / g_avg)
+    } else {
+        1.0
+    };
+    let b_ideal = if b_avg > 0.0001 {
+        clamp_gain(target_gray / b_avg)
+    } else {
+        1.0
+    };
+
+    // Calculate effective gains with strength applied
+    let r_gain = 1.0 - strength + strength * r_ideal;
+    let g_gain = 1.0 - strength + strength * g_ideal;
+    let b_gain = 1.0 - strength + strength * b_ideal;
+
+    // Apply color correction gains and find new max
+    let mut new_max = 0.0f32;
+    for pixel in data.chunks_exact_mut(3) {
+        pixel[0] *= r_gain;
+        pixel[1] *= g_gain;
+        pixel[2] *= b_gain;
+        new_max = new_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+    }
+
+    // Scale everything so the max equals the original overall_max
+    // This preserves all data while giving proper color balance
+    if new_max > overall_max && new_max > 0.0001 {
+        let scale = overall_max / new_max;
+        for value in data.iter_mut() {
+            *value *= scale;
+        }
+        // Return the effective gains (original gain × scale)
+        [r_gain * scale, g_gain * scale, b_gain * scale]
+    } else {
+        [r_gain, g_gain, b_gain]
+    }
+}
 
 #[derive(Default, Clone, Copy)]
 struct ChannelStats {
@@ -834,6 +1150,28 @@ pub fn auto_exposure(
     min_gain: f32,
     max_gain: f32,
 ) -> f32 {
+    auto_exposure_impl(data, target_median, strength, min_gain, max_gain, true)
+}
+
+/// Auto exposure without clipping - limits gain to prevent exceeding current max
+pub fn auto_exposure_no_clip(
+    data: &mut [f32],
+    target_median: f32,
+    strength: f32,
+    min_gain: f32,
+    max_gain: f32,
+) -> f32 {
+    auto_exposure_impl(data, target_median, strength, min_gain, max_gain, false)
+}
+
+fn auto_exposure_impl(
+    data: &mut [f32],
+    target_median: f32,
+    strength: f32,
+    min_gain: f32,
+    max_gain: f32,
+    clip: bool,
+) -> f32 {
     if data.is_empty() {
         return 1.0;
     }
@@ -842,10 +1180,16 @@ pub fn auto_exposure(
     let num_pixels = data.len() / 3;
     let mut luminances = Vec::with_capacity(num_pixels);
 
+    // Also find max value if not clipping
+    let mut current_max = 0.0f32;
+
     // Collect luminance samples (Rec.709 weights)
     for pixel in data.chunks_exact(3) {
         let lum = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
         luminances.push(lum);
+        if !clip {
+            current_max = current_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+        }
     }
 
     if luminances.is_empty() {
@@ -862,16 +1206,28 @@ pub fn auto_exposure(
     }
 
     let desired_gain = (target_median / median).clamp(min_gain, max_gain);
-    let gain = 1.0 + strength * (desired_gain - 1.0);
-    let gain = gain.clamp(min_gain, max_gain);
+    let mut gain = 1.0 + strength * (desired_gain - 1.0);
+    gain = gain.clamp(min_gain, max_gain);
+
+    // In no-clip mode, limit gain so max * gain doesn't exceed current max
+    if !clip && current_max > 0.0 && gain > 1.0 {
+        // Don't allow gain to push any values higher
+        gain = 1.0;
+    }
 
     if !gain.is_finite() || (gain - 1.0).abs() < 1e-6 {
         return 1.0;
     }
 
     // Apply gain in-place
-    for value in data.iter_mut() {
-        *value = (*value * gain).clamp(0.0, 1.0);
+    if clip {
+        for value in data.iter_mut() {
+            *value = (*value * gain).clamp(0.0, 1.0);
+        }
+    } else {
+        for value in data.iter_mut() {
+            *value = *value * gain;
+        }
     }
 
     gain

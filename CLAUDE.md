@@ -44,8 +44,8 @@ cargo build -p invers-core
 cargo build -p invers-gui
 
 # Run CLI (after building)
-./target/release/invers-cli --help
-./target/release/invers-cli convert --help
+./target/release/invers --help
+./target/release/invers convert --help
 
 # Check code without building
 cargo check

@@ -207,6 +207,8 @@ pub fn build_convert_options_with_inversion(
         inversion_mode,
         false, // no_auto_levels
         false, // preserve_headroom
+        false, // no_clip
+        false, // auto_wb
         debug,
     )
 }
@@ -226,6 +228,8 @@ pub fn build_convert_options_full(
     inversion_mode: Option<invers_core::models::InversionMode>,
     no_auto_levels: bool,
     preserve_headroom: bool,
+    no_clip: bool,
+    auto_wb: bool,
     debug: bool,
 ) -> Result<invers_core::models::ConvertOptions, String> {
     let config_handle = invers_core::config::pipeline_config_handle();
@@ -278,5 +282,7 @@ pub fn build_convert_options_full(
         auto_exposure_strength: defaults.auto_exposure_strength,
         auto_exposure_min_gain: defaults.auto_exposure_min_gain,
         auto_exposure_max_gain: defaults.auto_exposure_max_gain,
+        no_clip,
+        enable_auto_wb: auto_wb,
     })
 }

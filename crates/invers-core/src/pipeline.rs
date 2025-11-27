@@ -77,12 +77,17 @@ pub fn process_image(
     // Step 3.05: Apply auto-levels (histogram stretching) - CRITICAL FOR MATCHING PHOTOSHOP
     // This is the key missing step that makes images 30% darker
     if options.enable_auto_levels {
-        let params =
-            crate::auto_adjust::auto_levels(&mut data, channels, options.auto_levels_clip_percent);
+        let params = if options.no_clip {
+            // No-clip mode: normalize without stretching highlights beyond original max
+            crate::auto_adjust::auto_levels_no_clip(&mut data, channels, options.auto_levels_clip_percent)
+        } else {
+            crate::auto_adjust::auto_levels(&mut data, channels, options.auto_levels_clip_percent)
+        };
 
         if options.debug {
             eprintln!(
-                "[DEBUG] After auto-levels (clip={:.1}%) - R:[{:.4}-{:.4}], G:[{:.4}-{:.4}], B:[{:.4}-{:.4}]",
+                "[DEBUG] After auto-levels{} (clip={:.1}%) - R:[{:.4}-{:.4}], G:[{:.4}-{:.4}], B:[{:.4}-{:.4}]",
+                if options.no_clip { " (no-clip)" } else { "" },
                 options.auto_levels_clip_percent,
                 params[0], params[1], params[2], params[3], params[4], params[5]
             );
@@ -93,8 +98,8 @@ pub fn process_image(
             );
         }
 
-        // Apply headroom preservation if requested
-        if options.preserve_headroom {
+        // Apply headroom preservation if requested (skip in no-clip mode as it's redundant)
+        if options.preserve_headroom && !options.no_clip {
             apply_headroom(&mut data);
             if options.debug {
                 let stats = compute_stats(&data);
@@ -125,19 +130,51 @@ pub fn process_image(
         }
     }
 
-    // Step 3.2: Apply auto-color (neutralize color casts)
-    if options.enable_auto_color {
-        let adjustments = crate::auto_adjust::auto_color(
-            &mut data,
-            channels,
-            options.auto_color_strength,
-            options.auto_color_min_gain,
-            options.auto_color_max_gain,
-        );
+    // Step 3.15: Apply auto white balance (if enabled)
+    // Note: Auto-WB always applies full correction - it needs to boost channels for proper
+    // color balance. The no-clip mode only affects other operations.
+    if options.enable_auto_wb {
+        let multipliers = crate::auto_adjust::auto_white_balance(&mut data, channels, 1.0);
 
         if options.debug {
             eprintln!(
-                "[DEBUG] After auto-color (strength={:.2}) - adjustments: R={:.4}, G={:.4}, B={:.4}",
+                "[DEBUG] After auto-wb - multipliers: R={:.4}, G={:.4}, B={:.4}",
+                multipliers[0], multipliers[1], multipliers[2]
+            );
+            let stats = compute_stats(&data);
+            eprintln!(
+                "[DEBUG]   min: {:.6}, max: {:.6}, mean: {:.6}",
+                stats.0, stats.1, stats.2
+            );
+        }
+    }
+
+    // Step 3.2: Apply auto-color (neutralize color casts)
+    // Skip if auto-wb was applied - they do similar things and shouldn't be combined
+    if options.enable_auto_color && !options.enable_auto_wb {
+        let adjustments = if options.no_clip {
+            // No-clip mode: limit gains to prevent exceeding current max
+            crate::auto_adjust::auto_color_no_clip(
+                &mut data,
+                channels,
+                options.auto_color_strength,
+                options.auto_color_min_gain,
+                options.auto_color_max_gain,
+            )
+        } else {
+            crate::auto_adjust::auto_color(
+                &mut data,
+                channels,
+                options.auto_color_strength,
+                options.auto_color_min_gain,
+                options.auto_color_max_gain,
+            )
+        };
+
+        if options.debug {
+            eprintln!(
+                "[DEBUG] After auto-color{} (strength={:.2}) - adjustments: R={:.4}, G={:.4}, B={:.4}",
+                if options.no_clip { " (no-clip)" } else { "" },
                 options.auto_color_strength,
                 adjustments[0], adjustments[1], adjustments[2]
             );
@@ -153,18 +190,29 @@ pub fn process_image(
 
     // Step 3.3: Normalize exposure based on target median
     if options.enable_auto_exposure {
-        let gain = crate::auto_adjust::auto_exposure(
-            &mut data,
-            options.auto_exposure_target_median,
-            options.auto_exposure_strength,
-            options.auto_exposure_min_gain,
-            options.auto_exposure_max_gain,
-        );
+        let gain = if options.no_clip {
+            crate::auto_adjust::auto_exposure_no_clip(
+                &mut data,
+                options.auto_exposure_target_median,
+                options.auto_exposure_strength,
+                options.auto_exposure_min_gain,
+                options.auto_exposure_max_gain,
+            )
+        } else {
+            crate::auto_adjust::auto_exposure(
+                &mut data,
+                options.auto_exposure_target_median,
+                options.auto_exposure_strength,
+                options.auto_exposure_min_gain,
+                options.auto_exposure_max_gain,
+            )
+        };
 
         if options.debug {
             let stats = compute_stats(&data);
             eprintln!(
-                "[DEBUG] Auto exposure (target={:.3}) gain={:.4} - min: {:.6}, max: {:.6}, mean: {:.6}",
+                "[DEBUG] Auto exposure{} (target={:.3}) gain={:.4} - min: {:.6}, max: {:.6}, mean: {:.6}",
+                if options.no_clip { " (no-clip)" } else { "" },
                 options.auto_exposure_target_median,
                 gain,
                 stats.0,
@@ -176,9 +224,25 @@ pub fn process_image(
 
     // Step 3.4: Apply exposure compensation if requested
     if (options.exposure_compensation - 1.0).abs() > 0.001 {
-        for value in data.iter_mut() {
-            let scaled = *value * options.exposure_compensation;
-            *value = clamp_to_working_range(scaled);
+        if options.no_clip {
+            // In no-clip mode, only allow exposure reduction (gain <= 1.0)
+            let safe_exposure = options.exposure_compensation.min(1.0);
+            if safe_exposure < 1.0 {
+                for value in data.iter_mut() {
+                    *value = *value * safe_exposure;
+                }
+            }
+            if options.debug && options.exposure_compensation > 1.0 {
+                eprintln!(
+                    "[DEBUG] Exposure compensation {:.2}x skipped in no-clip mode (would clip)",
+                    options.exposure_compensation
+                );
+            }
+        } else {
+            for value in data.iter_mut() {
+                let scaled = *value * options.exposure_compensation;
+                *value = clamp_to_working_range(scaled);
+            }
         }
 
         if options.debug {
@@ -192,7 +256,8 @@ pub fn process_image(
 
     // Step 4: Apply color correction matrix (unless skipped)
     // Apply color matrix BEFORE tone curve to correct film dye characteristics in linear space
-    if !options.skip_color_matrix {
+    // In no-clip mode, skip color matrix as it can push values outside range
+    if !options.skip_color_matrix && !options.no_clip {
         if let Some(preset) = &options.film_preset {
             apply_color_matrix(&mut data, &preset.color_matrix, channels);
 
@@ -205,11 +270,16 @@ pub fn process_image(
             }
         }
     } else if options.debug {
-        eprintln!("[DEBUG] Color matrix skipped");
+        if options.no_clip {
+            eprintln!("[DEBUG] Color matrix skipped (no-clip mode)");
+        } else {
+            eprintln!("[DEBUG] Color matrix skipped");
+        }
     }
 
     // Step 5: Apply tone curve (unless skipped)
-    if !options.skip_tone_curve {
+    // In no-clip mode, skip tone curve as it can clip values
+    if !options.skip_tone_curve && !options.no_clip {
         if let Some(preset) = &options.film_preset {
             apply_tone_curve(&mut data, &preset.tone_curve);
         } else {
@@ -226,7 +296,11 @@ pub fn process_image(
             );
         }
     } else if options.debug {
-        eprintln!("[DEBUG] Tone curve skipped");
+        if options.no_clip {
+            eprintln!("[DEBUG] Tone curve skipped (no-clip mode)");
+        } else {
+            eprintln!("[DEBUG] Tone curve skipped");
+        }
     }
 
     // Step 6: Apply scan profile adjustments (only if a scan profile is specified)
@@ -270,7 +344,16 @@ pub fn process_image(
     // TODO: Implement colorspace transforms in M3
 
     // Final guard: keep values within photographic working range
-    enforce_working_range(&mut data);
+    // Skip in no-clip mode to preserve full dynamic range
+    if !options.no_clip {
+        enforce_working_range(&mut data);
+    } else if options.debug {
+        let stats = compute_stats(&data);
+        eprintln!(
+            "[DEBUG] Final (no-clip mode) - min: {:.6}, max: {:.6}, mean: {:.6}",
+            stats.0, stats.1, stats.2
+        );
+    }
 
     // Return processed image
     Ok(ProcessedImage {
