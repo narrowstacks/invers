@@ -7,7 +7,13 @@
       "Bash(cargo build:*)",
       "Bash(time ./target/release/invers-cli test-params:*)",
       "Bash(cargo doc:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/city- 001.tiff\" )",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/lux-01 001.tiff\" )",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/lux-01 002.tiff\" )",
+      "Bash(\"/Users/aaronanderson/Pictures/imacon-scans/seattle-01 002_neg.tif\" )",
+      "Bash(chmod:*)",
+      "Bash(./target/release/invers:*)"
     ],
     "deny": [],
     "ask": []
