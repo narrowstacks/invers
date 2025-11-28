@@ -69,6 +69,14 @@ enum Commands {
         /// Force CPU-only processing (GPU is used by default when available)
         #[arg(long)]
         cpu: bool,
+
+        /// Enable automatic white balance correction
+        #[arg(long)]
+        auto_wb: bool,
+
+        /// Strength of auto white balance correction (0.0-1.0, default 1.0)
+        #[arg(long, value_name = "FLOAT", default_value = "1.0")]
+        auto_wb_strength: f32,
     },
 
     /// Analyze image and estimate film base color
@@ -288,6 +296,8 @@ fn main() {
             base,
             silent,
             cpu,
+            auto_wb,
+            auto_wb_strength,
         } => cmd_convert(
             input,
             out,
@@ -301,6 +311,8 @@ fn main() {
             base,
             silent,
             cpu,
+            auto_wb,
+            auto_wb_strength,
         ),
 
         Commands::Analyze {
@@ -403,6 +415,8 @@ fn cmd_convert(
     base: Option<String>,
     silent: bool,
     cpu_only: bool,
+    auto_wb: bool,
+    auto_wb_strength: f32,
 ) -> Result<(), String> {
     let start_time = Instant::now();
 
@@ -551,7 +565,8 @@ fn cmd_convert(
         false, // no_auto_levels - use default (enabled)
         false, // preserve_headroom - use default
         false, // no_clip - use default
-        false, // auto_wb - disabled by default
+        auto_wb,
+        auto_wb_strength,
         false, // debug - disabled
         use_gpu,
     )?;
@@ -939,7 +954,7 @@ fn cmd_batch(
                 "linear-rec2020".to_string(),
                 Some(base_estimation),
                 film_preset.clone(),
-                None, // scan_profile
+                None,  // scan_profile
                 false, // no_tonecurve
                 false, // no_colormatrix
                 1.0,   // exposure
@@ -948,6 +963,7 @@ fn cmd_batch(
                 false, // preserve_headroom
                 false, // no_clip
                 false, // auto_wb
+                1.0,   // auto_wb_strength
                 false, // debug
                 use_gpu,
             )?;

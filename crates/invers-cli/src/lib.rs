@@ -259,6 +259,7 @@ pub fn build_convert_options_full(
         preserve_headroom,
         no_clip,
         auto_wb,
+        1.0, // auto_wb_strength: default full strength
         debug,
         true, // use_gpu: default true (will fallback if unavailable)
     )
@@ -281,6 +282,7 @@ pub fn build_convert_options_full_with_gpu(
     preserve_headroom: bool,
     no_clip: bool,
     auto_wb: bool,
+    auto_wb_strength: f32,
     debug: bool,
     use_gpu: bool,
 ) -> Result<invers_core::models::ConvertOptions, String> {
@@ -336,6 +338,7 @@ pub fn build_convert_options_full_with_gpu(
         auto_exposure_max_gain: defaults.auto_exposure_max_gain,
         no_clip,
         enable_auto_wb: auto_wb,
+        auto_wb_strength,
         use_gpu,
     })
 }

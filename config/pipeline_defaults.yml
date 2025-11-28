@@ -18,7 +18,7 @@ defaults:
   enable_auto_color: true
 
   # Strength of color correction adjustment (0.0-1.0+). Higher values apply stronger color correction.
-  auto_color_strength: 0.6
+  auto_color_strength: 1.0
 
   # Minimum gain multiplier for color correction. Prevents over-darkening of individual channels.
   auto_color_min_gain: 0.7

@@ -26,7 +26,11 @@
       "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(identify:*)",
-      "Bash(magick:*)"
+      "Bash(magick:*)",
+      "Bash(git stash show:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(__NEW_LINE__ echo \"\")"
     ],
     "deny": [],
     "ask": []

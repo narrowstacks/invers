@@ -119,11 +119,17 @@ fn execute_pipeline(
         // This requires luminance-based pixel selection, do on CPU for simplicity
         // Could be optimized to GPU later
         let wb_gains = compute_wb_gains_cpu(image, ctx)?;
-        // WB always applies full strength
+        // Apply WB gains with user-specified strength
+        let strength = options.auto_wb_strength;
+        let adjusted_gains = [
+            1.0 + strength * (wb_gains[0] - 1.0),
+            1.0 + strength * (wb_gains[1] - 1.0),
+            1.0 + strength * (wb_gains[2] - 1.0),
+        ];
         apply_gains(
             ctx,
             image,
-            wb_gains,
+            adjusted_gains,
             [0.0, 0.0, 0.0],
             pixel_count,
         )?;

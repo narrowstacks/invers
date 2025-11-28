@@ -455,6 +455,10 @@ pub struct ConvertOptions {
     #[serde(default = "default_false")]
     pub enable_auto_wb: bool,
 
+    /// Auto white balance strength (0.0-1.0, default 1.0)
+    #[serde(default = "default_wb_strength")]
+    pub auto_wb_strength: f32,
+
     /// Use GPU acceleration (requires "gpu" feature)
     #[serde(default = "default_true")]
     pub use_gpu: bool,
@@ -475,6 +479,10 @@ fn default_clip_percent() -> f32 {
 
 fn default_auto_color_strength() -> f32 {
     0.6
+}
+
+fn default_wb_strength() -> f32 {
+    1.0
 }
 
 fn default_auto_color_min_gain() -> f32 {

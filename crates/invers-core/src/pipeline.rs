@@ -170,7 +170,7 @@ pub fn process_image(
     // Note: Auto-WB always applies full correction - it needs to boost channels for proper
     // color balance. The no-clip mode only affects other operations.
     if options.enable_auto_wb {
-        let multipliers = crate::auto_adjust::auto_white_balance(&mut data, channels, 1.0);
+        let multipliers = crate::auto_adjust::auto_white_balance(&mut data, channels, options.auto_wb_strength);
 
         if options.debug {
             eprintln!(

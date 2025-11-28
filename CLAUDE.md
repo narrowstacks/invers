@@ -13,6 +13,7 @@ The project is in early development with most core functionality stubbed out but
 This is a Cargo workspace with three crates:
 
 - **invers-core**: Core library containing all conversion logic, models, and utilities
+
   - Image decoders (TIFF, PNG, planned RAW support)
   - Processing pipeline (base estimation, inversion, tone mapping, color correction)
   - Exporters (TIFF16, Linear DNG)
@@ -20,6 +21,7 @@ This is a Cargo workspace with three crates:
   - Data models for film presets, scan profiles, and conversion options
 
 - **invers-cli**: Command-line interface
+
   - Built with clap (derive API)
   - Commands: convert, analyze-base, batch, preset (list/show/create)
   - Most commands are currently unimplemented stubs
@@ -36,7 +38,7 @@ This is a Cargo workspace with three crates:
 cargo build
 
 # Build release version
-cargo build --release
+cargo build --release --features gpu
 
 # Build specific crate
 cargo build -p invers-cli
@@ -110,6 +112,7 @@ Working colorspace defaulted to "linear-rec2020" throughout the pipeline. All in
 ## Project Status
 
 Most functionality is currently unimplemented:
+
 - Decoders (TIFF, PNG, RAW) - stubs only
 - Pipeline functions (base estimation, inversion, tone mapping, color correction) - stubs only
 - Exporters (TIFF16, DNG) - stubs only
@@ -117,6 +120,7 @@ Most functionality is currently unimplemented:
 - GUI - architecture defined, M2 implementation planned
 
 Working functionality:
+
 - Preset listing (cmd_preset_list in CLI)
 - Basic CLI argument parsing
 - Data model structures complete

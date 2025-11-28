@@ -238,6 +238,7 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         auto_exposure_max_gain: params.auto_exposure_max_gain,
         no_clip: false,
         enable_auto_wb: false,
+        auto_wb_strength: 1.0,
         use_gpu: false,
     };
 
@@ -312,6 +313,7 @@ pub fn run_parameter_test_preloaded(
         auto_exposure_max_gain: params.auto_exposure_max_gain,
         no_clip: false,
         enable_auto_wb: false,
+        auto_wb_strength: 1.0,
         use_gpu: false,
     };
 

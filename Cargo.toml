@@ -1,9 +1,8 @@
 [workspace]
 members = [
     "crates/invers-core",
-    "crates/invers-cli",
-    "crates/invers-gui",
-]
+    "crates/invers-cli"
+    ]
 resolver = "2"
 
 [workspace.package]
