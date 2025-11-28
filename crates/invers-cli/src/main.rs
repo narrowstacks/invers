@@ -569,7 +569,12 @@ fn cmd_convert(
 
     // Process image
     if !silent {
-        println!("Processing image...");
+        // Show which backend will be used
+        if let Some(gpu_info) = invers_core::pipeline::get_processing_backend(options.use_gpu) {
+            println!("Processing image (GPU: {})...", gpu_info);
+        } else {
+            println!("Processing image (CPU)...");
+        }
     }
     let mut processed = invers_core::pipeline::process_image(decoded, &options)?;
 
@@ -847,6 +852,53 @@ fn cmd_batch(
     if inputs.is_empty() {
         return Err("No input files specified".to_string());
     }
+
+    // Expand inputs: directories become all image files within them
+    let supported_extensions = ["tif", "tiff", "png"];
+    let mut expanded_inputs: Vec<PathBuf> = Vec::new();
+
+    for input in &inputs {
+        if input.is_dir() {
+            // Read directory and collect supported image files
+            let entries = std::fs::read_dir(input)
+                .map_err(|e| format!("Failed to read directory {}: {}", input.display(), e))?;
+
+            let mut dir_files: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file()
+                        && path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .map(|ext| supported_extensions.contains(&ext.to_lowercase().as_str()))
+                            .unwrap_or(false)
+                })
+                .collect();
+
+            // Sort for consistent ordering
+            dir_files.sort();
+
+            if dir_files.is_empty() && !silent {
+                eprintln!(
+                    "Warning: No supported image files found in {}",
+                    input.display()
+                );
+            }
+
+            expanded_inputs.extend(dir_files);
+        } else if input.exists() {
+            expanded_inputs.push(input.clone());
+        } else {
+            return Err(format!("Input path does not exist: {}", input.display()));
+        }
+    }
+
+    if expanded_inputs.is_empty() {
+        return Err("No image files found in specified inputs".to_string());
+    }
+
+    let inputs = expanded_inputs;
 
     // Configure thread pool if specified
     if let Some(num_threads) = threads {

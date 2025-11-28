@@ -26,7 +26,21 @@
       "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(identify:*)",
-      "Bash(magick:*)"
+      "Bash(magick:*)",
+      "Bash(time ./target/release/invers batch:*)",
+      "Bash(time ./target/release/invers:*)",
+      "Bash(sudo purge:*)",
+      "Bash(sync)",
+      "Bash(__NEW_LINE__ echo \"=== After cache clear: CPU ===\")",
+      "Bash(for:*)",
+      "Bash(do echo \"--- $f ---\")",
+      "Bash(done)",
+      "Bash(do echo \"Run $i:\")",
+      "Bash(do time ./target/release/invers convert:*)",
+      "Bash(do echo \"\")",
+      "Bash(echo:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:wgpu.rs)"
     ],
     "deny": [],
     "ask": []

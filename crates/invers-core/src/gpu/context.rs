@@ -72,6 +72,14 @@ pub struct GpuPipelines {
     pub exposure_multiply: wgpu::ComputePipeline,
     pub shadow_lift: wgpu::ComputePipeline,
     pub highlight_compress: wgpu::ComputePipeline,
+
+    // Fused pipelines (optimized multi-operation passes)
+    pub fused_invert: wgpu::ComputePipeline,
+    pub fused_postprocess: wgpu::ComputePipeline,
+
+    // Cached bind group layouts (avoid recreation on every dispatch)
+    pub storage_uniform_layout: wgpu::BindGroupLayout,
+    pub histogram_layout: wgpu::BindGroupLayout,
 }
 
 /// GPU context holding the wgpu device, queue, and pre-compiled pipelines.
@@ -80,6 +88,45 @@ pub struct GpuContext {
     pub(crate) queue: Arc<wgpu::Queue>,
     pub(crate) pipelines: GpuPipelines,
     adapter_info: wgpu::AdapterInfo,
+    /// Pipeline cache for faster subsequent startups (Vulkan only, no-op on Metal)
+    pipeline_cache: Option<wgpu::PipelineCache>,
+}
+
+/// Get the path for storing the pipeline cache.
+fn get_pipeline_cache_path(adapter_info: &wgpu::AdapterInfo) -> Option<std::path::PathBuf> {
+    let cache_dir = dirs::cache_dir()?;
+    let invers_cache = cache_dir.join("invers").join("gpu");
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&invers_cache).ok()?;
+
+    // Use adapter info to create a unique cache file per device
+    // This ensures we don't use incompatible caches across different GPUs
+    let cache_key = format!(
+        "pipeline_cache_{}_{:?}_{:x}.bin",
+        adapter_info.name.replace(' ', "_"),
+        adapter_info.backend,
+        adapter_info.device
+    );
+
+    Some(invers_cache.join(cache_key))
+}
+
+/// Load pipeline cache data from disk.
+fn load_pipeline_cache_data(adapter_info: &wgpu::AdapterInfo) -> Option<Vec<u8>> {
+    let path = get_pipeline_cache_path(adapter_info)?;
+    std::fs::read(&path).ok()
+}
+
+/// Save pipeline cache data to disk atomically.
+fn save_pipeline_cache_data(adapter_info: &wgpu::AdapterInfo, data: &[u8]) {
+    if let Some(path) = get_pipeline_cache_path(adapter_info) {
+        // Write to temp file first, then rename for atomicity
+        let temp_path = path.with_extension("tmp");
+        if std::fs::write(&temp_path, data).is_ok() {
+            let _ = std::fs::rename(&temp_path, &path);
+        }
+    }
 }
 
 impl GpuContext {
@@ -165,11 +212,18 @@ impl GpuContext {
         // Increase buffer size limit
         limits.max_buffer_size = adapter_limits.max_buffer_size;
 
+        // Check if pipeline cache feature is supported
+        let adapter_features = adapter.features();
+        let mut required_features = wgpu::Features::empty();
+        if adapter_features.contains(wgpu::Features::PIPELINE_CACHE) {
+            required_features |= wgpu::Features::PIPELINE_CACHE;
+        }
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("invers-gpu"),
-                    required_features: wgpu::Features::empty(),
+                    required_features,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
@@ -181,14 +235,39 @@ impl GpuContext {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        // Compile all shaders and create pipelines
-        let pipelines = Self::create_pipelines(&device)?;
+        // Try to load existing pipeline cache from disk (Vulkan only - no-op on Metal)
+        // Only create cache if the feature is supported
+        let pipeline_cache = if device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            // Safety: cache_data came from a previous get_data() call, or is None
+            let cache_data = load_pipeline_cache_data(&adapter_info);
+            let cache = unsafe {
+                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                    label: Some("invers_pipeline_cache"),
+                    data: cache_data.as_deref(),
+                    fallback: true, // Create empty cache if data is invalid
+                })
+            };
+            Some(cache)
+        } else {
+            None
+        };
+
+        // Compile all shaders and create pipelines (using cache if available)
+        let pipelines = Self::create_pipelines(&device, pipeline_cache.as_ref())?;
+
+        // Save updated cache to disk for next run
+        if let Some(ref cache) = pipeline_cache {
+            if let Some(data) = cache.get_data() {
+                save_pipeline_cache_data(&adapter_info, &data);
+            }
+        }
 
         Ok(Self {
             device,
             queue,
             pipelines,
             adapter_info,
+            pipeline_cache,
         })
     }
 
@@ -198,7 +277,11 @@ impl GpuContext {
     }
 
     /// Create all compute pipelines from shader sources.
-    fn create_pipelines(device: &wgpu::Device) -> Result<GpuPipelines, GpuError> {
+    /// If a pipeline cache is provided, it will be used to accelerate compilation.
+    fn create_pipelines(
+        device: &wgpu::Device,
+        cache: Option<&wgpu::PipelineCache>,
+    ) -> Result<GpuPipelines, GpuError> {
         // Load shader modules
         let inversion_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("inversion"),
@@ -378,7 +461,7 @@ impl GpuContext {
             module: &inversion_module,
             entry_point: Some("invert_linear"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let inversion_log = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -387,7 +470,7 @@ impl GpuContext {
             module: &inversion_module,
             entry_point: Some("invert_log"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let inversion_divide = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -396,7 +479,7 @@ impl GpuContext {
             module: &inversion_module,
             entry_point: Some("invert_divide"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let inversion_mask_aware =
@@ -406,7 +489,7 @@ impl GpuContext {
                 module: &inversion_module,
                 entry_point: Some("invert_mask_aware"),
                 compilation_options: Default::default(),
-                cache: None,
+                cache,
             });
 
         let inversion_bw = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -415,7 +498,7 @@ impl GpuContext {
             module: &inversion_module,
             entry_point: Some("invert_bw"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let tone_curve_scurve = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -424,7 +507,7 @@ impl GpuContext {
             module: &tone_curve_module,
             entry_point: Some("apply_scurve"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let tone_curve_asymmetric =
@@ -434,7 +517,7 @@ impl GpuContext {
                 module: &tone_curve_module,
                 entry_point: Some("apply_asymmetric"),
                 compilation_options: Default::default(),
-                cache: None,
+                cache,
             });
 
         let color_matrix = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -443,7 +526,7 @@ impl GpuContext {
             module: &color_matrix_module,
             entry_point: Some("apply_color_matrix"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let apply_gains = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -452,7 +535,7 @@ impl GpuContext {
             module: &color_matrix_module,
             entry_point: Some("apply_gains"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let histogram_accumulate =
@@ -462,7 +545,7 @@ impl GpuContext {
                 module: &histogram_module,
                 entry_point: Some("accumulate_histogram"),
                 compilation_options: Default::default(),
-                cache: None,
+                cache,
             });
 
         let histogram_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -471,7 +554,7 @@ impl GpuContext {
             module: &histogram_module,
             entry_point: Some("clear_histogram"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let rgb_to_hsl = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -480,7 +563,7 @@ impl GpuContext {
             module: &color_convert_module,
             entry_point: Some("rgb_to_hsl"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let hsl_to_rgb = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -489,7 +572,7 @@ impl GpuContext {
             module: &color_convert_module,
             entry_point: Some("hsl_to_rgb"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let hsl_adjust = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -498,7 +581,7 @@ impl GpuContext {
             module: &color_convert_module,
             entry_point: Some("apply_hsl_adjustments"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let clamp_range = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -507,7 +590,7 @@ impl GpuContext {
             module: &utility_module,
             entry_point: Some("clamp_range"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let exposure_multiply = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -516,7 +599,7 @@ impl GpuContext {
             module: &utility_module,
             entry_point: Some("exposure_multiply"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let shadow_lift = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -525,7 +608,7 @@ impl GpuContext {
             module: &utility_module,
             entry_point: Some("shadow_lift"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
         });
 
         let highlight_compress = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -534,7 +617,36 @@ impl GpuContext {
             module: &utility_module,
             entry_point: Some("highlight_compress"),
             compilation_options: Default::default(),
-            cache: None,
+            cache,
+        });
+
+        // Fused shader modules
+        let fused_invert_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fused_invert"),
+            source: wgpu::ShaderSource::Wgsl(Shaders::FUSED_INVERT.into()),
+        });
+
+        let fused_postprocess_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fused_postprocess"),
+            source: wgpu::ShaderSource::Wgsl(Shaders::FUSED_POSTPROCESS.into()),
+        });
+
+        let fused_invert = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fused_invert"),
+            layout: Some(&storage_uniform_pipeline_layout),
+            module: &fused_invert_module,
+            entry_point: Some("fused_invert_main"),
+            compilation_options: Default::default(),
+            cache,
+        });
+
+        let fused_postprocess = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fused_postprocess"),
+            layout: Some(&storage_uniform_pipeline_layout),
+            module: &fused_postprocess_module,
+            entry_point: Some("fused_postprocess_main"),
+            compilation_options: Default::default(),
+            cache,
         });
 
         Ok(GpuPipelines {
@@ -556,6 +668,11 @@ impl GpuContext {
             exposure_multiply,
             shadow_lift,
             highlight_compress,
+            fused_invert,
+            fused_postprocess,
+            // Cache the bind group layouts for reuse
+            storage_uniform_layout,
+            histogram_layout,
         })
     }
 

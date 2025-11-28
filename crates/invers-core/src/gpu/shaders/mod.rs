@@ -21,4 +21,10 @@ impl Shaders {
 
     /// Utility operations (clamp, exposure, shadow lift, highlight compress).
     pub const UTILITY: &'static str = include_str!("utility.wgsl");
+
+    /// Fused inversion shader (invert + shadow lift + highlight compress).
+    pub const FUSED_INVERT: &'static str = include_str!("fused_invert.wgsl");
+
+    /// Fused post-processing shader (gains + matrix + tone curve + clamp).
+    pub const FUSED_POSTPROCESS: &'static str = include_str!("fused_postprocess.wgsl");
 }

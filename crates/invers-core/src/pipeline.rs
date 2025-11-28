@@ -39,7 +39,23 @@ pub struct ProcessedImage {
     pub export_as_grayscale: bool,
 }
 
-/// Execute the full processing pipeline
+/// Check what processing backend will be used.
+/// Returns Some(gpu_info_string) if GPU will be used, None for CPU.
+#[cfg(feature = "gpu")]
+pub fn get_processing_backend(use_gpu: bool) -> Option<String> {
+    if use_gpu && gpu::is_gpu_available() {
+        gpu::gpu_info()
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+pub fn get_processing_backend(_use_gpu: bool) -> Option<String> {
+    None
+}
+
+/// Execute the full processing pipeline.
 pub fn process_image(
     image: DecodedImage,
     options: &ConvertOptions,
@@ -47,12 +63,6 @@ pub fn process_image(
     // Try GPU path if enabled and available
     #[cfg(feature = "gpu")]
     if options.use_gpu && gpu::is_gpu_available() {
-        if options.debug {
-            if let Some(info) = gpu::gpu_info() {
-                eprintln!("[DEBUG] Using GPU acceleration: {}", info);
-            }
-        }
-
         match gpu::process_image_gpu(&image, options) {
             Ok(result) => return Ok(result),
             Err(e) => {
@@ -60,11 +70,6 @@ pub fn process_image(
                 eprintln!("[WARN] GPU processing failed, falling back to CPU: {}", e);
             }
         }
-    }
-
-    #[cfg(feature = "gpu")]
-    if options.use_gpu && !gpu::is_gpu_available() && options.debug {
-        eprintln!("[DEBUG] GPU requested but not available, using CPU");
     }
 
     // CPU path

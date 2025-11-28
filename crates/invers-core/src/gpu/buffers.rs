@@ -329,6 +329,91 @@ pub struct UtilityParams {
     pub pixel_count: u32,
 }
 
+/// Fused inversion parameters (invert + shadow lift + highlight compress).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct FusedInvertParams {
+    // Inversion parameters
+    pub base_r: f32,
+    pub base_g: f32,
+    pub base_b: f32,
+    pub green_floor: f32,
+    pub blue_floor: f32,
+    pub bw_headroom: f32,
+
+    // Shadow lift
+    pub shadow_lift: f32,
+
+    // Highlight compression
+    pub highlight_threshold: f32,
+    pub highlight_compression: f32,
+
+    // Control flags (bits 0-2: mode, bit 3: shadow, bit 4: highlight)
+    pub flags: u32,
+
+    pub pixel_count: u32,
+    pub _padding: u32,
+}
+
+impl FusedInvertParams {
+    pub const MODE_LINEAR: u32 = 0;
+    pub const MODE_LOG: u32 = 1;
+    pub const MODE_DIVIDE: u32 = 2;
+    pub const MODE_MASK_AWARE: u32 = 3;
+    pub const MODE_BW: u32 = 4;
+
+    pub const FLAG_SHADOW_LIFT: u32 = 8;      // bit 3
+    pub const FLAG_HIGHLIGHT_COMPRESS: u32 = 16; // bit 4
+}
+
+/// Fused post-processing parameters (gains + matrix + tone curve + clamp).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct FusedPostprocessParams {
+    // Gains (auto-levels)
+    pub gain_r: f32,
+    pub gain_g: f32,
+    pub gain_b: f32,
+    pub offset_r: f32,
+    pub offset_g: f32,
+    pub offset_b: f32,
+
+    // Color matrix (row-major 3x3)
+    pub m00: f32,
+    pub m01: f32,
+    pub m02: f32,
+    pub m10: f32,
+    pub m11: f32,
+    pub m12: f32,
+    pub m20: f32,
+    pub m21: f32,
+    pub m22: f32,
+
+    // Tone curve
+    pub tone_strength: f32,
+    pub toe_strength: f32,
+    pub toe_length: f32,
+    pub shoulder_strength: f32,
+    pub shoulder_start: f32,
+
+    // Exposure
+    pub exposure_multiplier: f32,
+
+    // Control flags
+    pub flags: u32,
+
+    pub pixel_count: u32,
+}
+
+impl FusedPostprocessParams {
+    pub const FLAG_GAINS: u32 = 1;           // bit 0
+    pub const FLAG_COLOR_MATRIX: u32 = 2;    // bit 1
+    pub const FLAG_TONE_SCURVE: u32 = 4;     // bit 2
+    pub const FLAG_TONE_ASYMMETRIC: u32 = 8; // bit 3
+    pub const FLAG_CLAMP: u32 = 16;          // bit 4
+    pub const FLAG_EXPOSURE: u32 = 32;       // bit 5
+}
+
 /// Create a uniform buffer from parameter data.
 pub fn create_uniform_buffer<T: Pod>(device: &wgpu::Device, data: &T, label: &str) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -336,4 +421,53 @@ pub fn create_uniform_buffer<T: Pod>(device: &wgpu::Device, data: &T, label: &st
         contents: bytemuck::bytes_of(data),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     })
+}
+
+/// Maximum uniform buffer size (must accommodate largest params struct)
+pub const MAX_UNIFORM_SIZE: usize = 256;
+
+/// Pool of reusable uniform buffers to avoid allocation overhead.
+/// Each buffer is sized to accommodate any parameter struct.
+pub struct UniformBufferPool {
+    buffers: Vec<wgpu::Buffer>,
+    next_index: usize,
+}
+
+impl UniformBufferPool {
+    /// Create a new pool with the specified number of buffers.
+    pub fn new(device: &wgpu::Device, count: usize) -> Self {
+        let buffers = (0..count)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("uniform_pool_{}", i)),
+                    size: MAX_UNIFORM_SIZE as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+
+        Self {
+            buffers,
+            next_index: 0,
+        }
+    }
+
+    /// Get the next available buffer from the pool (round-robin).
+    /// Writes the data to the buffer using the queue.
+    pub fn get_buffer<T: Pod>(
+        &mut self,
+        queue: &wgpu::Queue,
+        data: &T,
+    ) -> &wgpu::Buffer {
+        let buffer = &self.buffers[self.next_index];
+        queue.write_buffer(buffer, 0, bytemuck::bytes_of(data));
+        self.next_index = (self.next_index + 1) % self.buffers.len();
+        buffer
+    }
+
+    /// Reset the pool index for a new frame/operation.
+    pub fn reset(&mut self) {
+        self.next_index = 0;
+    }
 }
