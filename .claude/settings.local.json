@@ -30,7 +30,10 @@
       "Bash(git stash show:*)",
       "Bash(git checkout:*)",
       "Bash(git stash:*)",
-      "Bash(__NEW_LINE__ echo \"\")"
+      "Bash(__NEW_LINE__ echo \"\")",
+      "Bash(curl:*)",
+      "Bash(./scripts/update-formula.sh:*)",
+      "Bash(tar:*)"
     ],
     "deny": [],
     "ask": []

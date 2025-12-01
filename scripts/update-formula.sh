@@ -91,6 +91,23 @@ class Invers < Formula
 
   def install
     bin.install "invers"
+    pkgshare.install "config"
+    pkgshare.install "profiles"
+  end
+
+  def caveats
+    <<~EOS
+      To set up your configuration directory with default presets, run:
+        invers init
+
+      This will create ~/invers/ with:
+        ~/invers/pipeline_defaults.yml  - Pipeline processing defaults
+        ~/invers/presets/film/          - Film preset profiles
+        ~/invers/presets/scan/          - Scanner profiles
+
+      Default presets are also available in:
+        #{pkgshare}/
+    EOS
   end
 
   test do
