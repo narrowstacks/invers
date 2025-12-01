@@ -54,9 +54,13 @@ jobs:
       - name: Create archive (Unix)
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../invers-${{ matrix.target }}.tar.gz invers
-          cd ../../..
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/invers staging/
+          cp -r profiles staging/
+          cp -r config staging/
+          cd staging
+          tar czvf ../invers-${{ matrix.target }}.tar.gz .
+          cd ..
 
       - name: Generate SHA256
         shell: bash

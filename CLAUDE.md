@@ -93,7 +93,7 @@ Core data structures (crates/invers-core/src/models.rs):
 
 Presets are YAML files managed via crates/invers-core/src/presets.rs:
 
-- Film presets: `~/.config/invers/presets/` (or `profiles/film/` in repo)
+- Film presets: `~/invers/presets/film/` (or `profiles/film/` in repo)
 - Scan profiles: stored alongside film presets
 - Functions: load, save, list presets
 

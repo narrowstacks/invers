@@ -21,7 +21,8 @@ A professional-grade film negative to positive conversion tool written in Rust. 
 The easiest way to install invers is via Homebrew:
 
 ```bash
-brew install narrowstacks/invers/invers
+brew tap narrowstacks/invers
+brew install invers
 ```
 
 This installs pre-built binaries for:
@@ -341,9 +342,9 @@ highlight_compression: 0.95
 
 ### Default Locations
 
-- **Film presets**: `~/.config/invers/presets/` or `profiles/film/`
-- **Scan profiles**: Same location as film presets
-- **Pipeline config**: `pipeline_defaults.yml` or `pipeline.yml`
+- **Film presets**: `~/invers/presets/film/`
+- **Scan profiles**: `~/invers/presets/scan/`
+- **Pipeline config**: `~/invers/pipeline_defaults.yml`
 
 ## Project Structure
 

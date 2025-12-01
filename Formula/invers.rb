@@ -25,6 +25,49 @@ class Invers < Formula
 
   def install
     bin.install "invers"
+    pkgshare.install "config"
+    pkgshare.install "profiles"
+  end
+
+  def post_install
+    invers_dir = Pathname.new(Dir.home)/"invers"
+
+    # Create ~/invers directory structure if it doesn't exist
+    (invers_dir/"presets").mkpath
+
+    # Copy config file if it doesn't exist
+    config_file = invers_dir/"pipeline_defaults.yml"
+    unless config_file.exist?
+      cp pkgshare/"config/pipeline_defaults.yml", config_file
+    end
+
+    # Copy film presets if directory is empty
+    presets_film_dir = invers_dir/"presets/film"
+    presets_film_dir.mkpath
+    if presets_film_dir.children.empty?
+      cp_r pkgshare/"profiles/film/.", presets_film_dir
+    end
+
+    # Copy scan profiles if directory is empty
+    presets_scan_dir = invers_dir/"presets/scan"
+    presets_scan_dir.mkpath
+    if presets_scan_dir.children.empty?
+      cp_r pkgshare/"profiles/scan/.", presets_scan_dir
+    end
+  end
+
+  def caveats
+    <<~EOS
+      Configuration files have been installed to ~/invers/
+
+      You can customize these files:
+        ~/invers/pipeline_defaults.yml  - Pipeline processing defaults
+        ~/invers/presets/film/          - Film preset profiles
+        ~/invers/presets/scan/          - Scanner profiles
+
+      Default presets are available in:
+        #{pkgshare}/
+    EOS
   end
 
   test do

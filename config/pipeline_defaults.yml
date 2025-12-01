@@ -85,7 +85,7 @@ testing:
     auto_color_max_gain: 1.3
     base_brightest_percent: 5.0
     base_sampling_mode: Median
-    inversion_mode: MaskAware
+    inversion_mode: MaskAxare
     shadow_lift_mode: Percentile
     shadow_lift_value: 0.02
     highlight_compression: 1.0

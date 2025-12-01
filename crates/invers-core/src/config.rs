@@ -403,9 +403,9 @@ pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle 
         }
     }
 
-    if let Some(config_dir) = dirs::config_dir() {
+    if let Some(home_dir) = dirs::home_dir() {
         for name in CONFIG_FILENAMES {
-            candidates.push(config_dir.join("invers").join(name));
+            candidates.push(home_dir.join("invers").join(name));
         }
     }
 
