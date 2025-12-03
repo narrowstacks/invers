@@ -126,13 +126,7 @@ fn execute_pipeline(
             1.0 + strength * (wb_gains[1] - 1.0),
             1.0 + strength * (wb_gains[2] - 1.0),
         ];
-        apply_gains(
-            ctx,
-            image,
-            adjusted_gains,
-            [0.0, 0.0, 0.0],
-            pixel_count,
-        )?;
+        apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
     }
 
     // Stage 8: Auto-color (if enabled, skip if auto-wb was applied)
@@ -149,13 +143,7 @@ fn execute_pipeline(
             1.0 + strength * (color_gains[1] - 1.0),
             1.0 + strength * (color_gains[2] - 1.0),
         ];
-        apply_gains(
-            ctx,
-            image,
-            adjusted_gains,
-            [0.0, 0.0, 0.0],
-            pixel_count,
-        )?;
+        apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
     }
 
     // Stage 9: Auto-exposure (if enabled)
@@ -728,10 +716,30 @@ fn apply_hsl_adjustments(
     let params = HslAdjustParams {
         hue_adj_0: [hsl.hue[0], hsl.hue[1], hsl.hue[2], hsl.hue[3]],
         hue_adj_1: [hsl.hue[4], hsl.hue[5], hsl.hue[6], hsl.hue[7]],
-        sat_adj_0: [hsl.saturation[0], hsl.saturation[1], hsl.saturation[2], hsl.saturation[3]],
-        sat_adj_1: [hsl.saturation[4], hsl.saturation[5], hsl.saturation[6], hsl.saturation[7]],
-        lum_adj_0: [hsl.luminance[0], hsl.luminance[1], hsl.luminance[2], hsl.luminance[3]],
-        lum_adj_1: [hsl.luminance[4], hsl.luminance[5], hsl.luminance[6], hsl.luminance[7]],
+        sat_adj_0: [
+            hsl.saturation[0],
+            hsl.saturation[1],
+            hsl.saturation[2],
+            hsl.saturation[3],
+        ],
+        sat_adj_1: [
+            hsl.saturation[4],
+            hsl.saturation[5],
+            hsl.saturation[6],
+            hsl.saturation[7],
+        ],
+        lum_adj_0: [
+            hsl.luminance[0],
+            hsl.luminance[1],
+            hsl.luminance[2],
+            hsl.luminance[3],
+        ],
+        lum_adj_1: [
+            hsl.luminance[4],
+            hsl.luminance[5],
+            hsl.luminance[6],
+            hsl.luminance[7],
+        ],
         pixel_count,
         _padding: [0, 0, 0],
     };
@@ -894,14 +902,13 @@ fn dispatch_compute(
 /// CPU-side base estimation (statistical analysis)
 fn estimate_base_cpu(decoded: &DecodedImage, _options: &ConvertOptions) -> BaseEstimation {
     // Delegate to the existing CPU implementation
-    crate::pipeline::estimate_base(decoded, None, None, None)
-        .unwrap_or_else(|_| BaseEstimation {
-            roi: None,
-            medians: [0.5, 0.5, 0.5],
-            noise_stats: None,
-            auto_estimated: true,
-            mask_profile: None,
-        })
+    crate::pipeline::estimate_base(decoded, None, None, None).unwrap_or_else(|_| BaseEstimation {
+        roi: None,
+        medians: [0.5, 0.5, 0.5],
+        noise_stats: None,
+        auto_estimated: true,
+        mask_profile: None,
+    })
 }
 
 /// Compute auto-levels gains from histogram data
@@ -1036,11 +1043,7 @@ fn compute_wb_gains_cpu(image: &GpuImage, _ctx: &GpuContext) -> Result<[f32; 3],
     let b_avg = (b_sum / count as f64) as f32;
 
     // Normalize to green channel
-    Ok([
-        g_avg / r_avg.max(0.001),
-        1.0,
-        g_avg / b_avg.max(0.001),
-    ])
+    Ok([g_avg / r_avg.max(0.001), 1.0, g_avg / b_avg.max(0.001)])
 }
 
 /// Compute exposure gain (requires downloading image data for median)
@@ -1063,12 +1066,17 @@ fn compute_exposure_gain_cpu(
 
     // Find median
     let mid = luminances.len() / 2;
-    let median = *luminances.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap()).1;
+    let median = *luminances
+        .select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap())
+        .1;
 
     // Compute gain to reach target
     let target = options.auto_exposure_target_median;
     let gain = target / median.max(0.001);
 
     // Clamp gain
-    Ok(gain.clamp(options.auto_exposure_min_gain, options.auto_exposure_max_gain))
+    Ok(gain.clamp(
+        options.auto_exposure_min_gain,
+        options.auto_exposure_max_gain,
+    ))
 }

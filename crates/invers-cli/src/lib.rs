@@ -298,7 +298,11 @@ pub fn build_convert_options_full_with_gpu(
 
     // Use provided inversion mode, or scan profile preference, or fall back to config default
     let inversion_mode = inversion_mode
-        .or_else(|| scan_profile.as_ref().and_then(|sp| sp.preferred_inversion_mode))
+        .or_else(|| {
+            scan_profile
+                .as_ref()
+                .and_then(|sp| sp.preferred_inversion_mode)
+        })
         .unwrap_or(defaults.inversion_mode);
 
     // Auto-levels: disabled if --no-auto-levels is set

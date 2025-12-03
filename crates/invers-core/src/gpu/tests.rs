@@ -72,15 +72,9 @@ fn test_upload_download_roundtrip() {
 
     let test_data: Vec<f32> = (0..1024 * 3).map(|i| (i as f32) / 3072.0).collect();
 
-    let gpu_image = buffers::GpuImage::upload(
-        ctx.device.clone(),
-        ctx.queue.clone(),
-        &test_data,
-        32,
-        32,
-        3,
-    )
-    .expect("Failed to upload");
+    let gpu_image =
+        buffers::GpuImage::upload(ctx.device.clone(), ctx.queue.clone(), &test_data, 32, 32, 3)
+            .expect("Failed to upload");
 
     let downloaded = gpu_image.download().expect("Failed to download");
 
@@ -235,11 +229,11 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
             mask_profile: None,
         }),
         num_threads: None,
-        skip_tone_curve: true,        // Skip for simpler comparison
-        skip_color_matrix: true,      // Skip for simpler comparison
+        skip_tone_curve: true,   // Skip for simpler comparison
+        skip_color_matrix: true, // Skip for simpler comparison
         exposure_compensation: 1.0,
         debug: false,
-        enable_auto_levels: false,    // Disable for deterministic comparison
+        enable_auto_levels: false, // Disable for deterministic comparison
         auto_levels_clip_percent: 0.1,
         preserve_headroom: false,
         enable_auto_color: false,
@@ -257,7 +251,7 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
         auto_exposure_strength: 0.5,
         auto_exposure_min_gain: 0.5,
         auto_exposure_max_gain: 2.0,
-        no_clip: true,  // Preserve full range for comparison
+        no_clip: true, // Preserve full range for comparison
         enable_auto_wb: false,
         use_gpu,
     }
@@ -276,8 +270,8 @@ fn test_gpu_cpu_parity_linear_inversion() {
 
     // Process with CPU
     let cpu_options = create_test_options(false);
-    let cpu_result = crate::pipeline::process_image(decoded, &cpu_options)
-        .expect("CPU processing failed");
+    let cpu_result =
+        crate::pipeline::process_image(decoded, &cpu_options).expect("CPU processing failed");
 
     // Process with GPU
     let gpu_options = create_test_options(true);
@@ -287,7 +281,11 @@ fn test_gpu_cpu_parity_linear_inversion() {
     // Compare results
     assert_eq!(cpu_result.width, gpu_result.width, "Width mismatch");
     assert_eq!(cpu_result.height, gpu_result.height, "Height mismatch");
-    assert_eq!(cpu_result.data.len(), gpu_result.data.len(), "Data length mismatch");
+    assert_eq!(
+        cpu_result.data.len(),
+        gpu_result.data.len(),
+        "Data length mismatch"
+    );
 
     // Allow slightly larger tolerance for GPU (floating point accumulation differences)
     let parity_tolerance = 1e-3;
@@ -295,7 +293,12 @@ fn test_gpu_cpu_parity_linear_inversion() {
     let mut max_diff: f32 = 0.0;
     let mut mismatch_count = 0;
 
-    for (i, (cpu_val, gpu_val)) in cpu_result.data.iter().zip(gpu_result.data.iter()).enumerate() {
+    for (i, (cpu_val, gpu_val)) in cpu_result
+        .data
+        .iter()
+        .zip(gpu_result.data.iter())
+        .enumerate()
+    {
         let diff = (cpu_val - gpu_val).abs();
         max_diff = max_diff.max(diff);
 

@@ -15,13 +15,13 @@
 //!
 //! At runtime, GPU processing can be enabled/disabled via `ConvertOptions::use_gpu`.
 
-mod context;
 mod buffers;
+mod context;
 mod pipeline;
 mod shaders;
 
-pub use context::{GpuContext, GpuError};
 pub use buffers::GpuImage;
+pub use context::{GpuContext, GpuError};
 pub use pipeline::process_image_gpu;
 
 /// Check if GPU acceleration is available on this system.

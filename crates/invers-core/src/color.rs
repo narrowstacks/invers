@@ -126,11 +126,7 @@ pub fn rgb_to_hsl(r: f32, g: f32, b: f32) -> Hsl {
         ((r - g) / delta + 4.0) * 60.0
     };
 
-    Hsl {
-        h: h % 360.0,
-        s,
-        l,
-    }
+    Hsl { h: h % 360.0, s, l }
 }
 
 /// Convert HSL to RGB
@@ -443,10 +439,7 @@ fn hue_distance(h1: f32, h2: f32) -> f32 {
 ///
 /// This is the Camera Raw style HSL adjustment that affects
 /// specific color ranges independently.
-pub fn apply_hsl_adjustments(
-    data: &mut [f32],
-    adjustments: &crate::models::HslAdjustments,
-) {
+pub fn apply_hsl_adjustments(data: &mut [f32], adjustments: &crate::models::HslAdjustments) {
     if !adjustments.has_adjustments() {
         return;
     }
@@ -466,8 +459,7 @@ pub fn apply_hsl_adjustments(
         let (primary, secondary, blend) = get_color_range_weights(hsl.h);
 
         // Calculate weighted adjustments
-        let hue_adj = adjustments.hue[primary] * (1.0 - blend)
-            + adjustments.hue[secondary] * blend;
+        let hue_adj = adjustments.hue[primary] * (1.0 - blend) + adjustments.hue[secondary] * blend;
         let sat_adj = adjustments.saturation[primary] * (1.0 - blend)
             + adjustments.saturation[secondary] * blend;
         let lum_adj = adjustments.luminance[primary] * (1.0 - blend)

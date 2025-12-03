@@ -115,7 +115,11 @@ pub fn process_image(
     if options.enable_auto_levels {
         let params = if options.no_clip {
             // No-clip mode: normalize without stretching highlights beyond original max
-            crate::auto_adjust::auto_levels_no_clip(&mut data, channels, options.auto_levels_clip_percent)
+            crate::auto_adjust::auto_levels_no_clip(
+                &mut data,
+                channels,
+                options.auto_levels_clip_percent,
+            )
         } else {
             crate::auto_adjust::auto_levels(&mut data, channels, options.auto_levels_clip_percent)
         };
@@ -170,7 +174,8 @@ pub fn process_image(
     // Note: Auto-WB always applies full correction - it needs to boost channels for proper
     // color balance. The no-clip mode only affects other operations.
     if options.enable_auto_wb {
-        let multipliers = crate::auto_adjust::auto_white_balance(&mut data, channels, options.auto_wb_strength);
+        let multipliers =
+            crate::auto_adjust::auto_white_balance(&mut data, channels, options.auto_wb_strength);
 
         if options.debug {
             eprintln!(
@@ -462,11 +467,17 @@ fn estimate_base_from_manual_roi(
 
     verbose_println!(
         "[BASE] Manual ROI | using {} px ({:.1}%) brightest",
-        num_brightest, percentage
+        num_brightest,
+        percentage
     );
     verbose_println!(
         "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
-        medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+        medians[0],
+        medians[1],
+        medians[2],
+        noise_stats[0],
+        noise_stats[1],
+        noise_stats[2]
     );
 
     let (valid, reason) = validate_base_candidate(&medians, &noise_stats, candidate.brightness);
@@ -585,7 +596,11 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
         if x + width > image.width || y + height > image.height || width == 0 || height == 0 {
             verbose_println!(
                 "[BASE] Skipping {} candidate: ROI out of bounds ({}x{} at {}, {})",
-                candidate.label, width, height, x, y
+                candidate.label,
+                width,
+                height,
+                x,
+                y
             );
             continue;
         }
@@ -625,11 +640,19 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
 
         verbose_println!(
             "[BASE] Candidate {:>6} | brightness={:.4} | using {} px ({:.1}%)",
-            candidate.label, candidate.brightness, num_brightest, percentage
+            candidate.label,
+            candidate.brightness,
+            num_brightest,
+            percentage
         );
         verbose_println!(
             "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
-            medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+            medians[0],
+            medians[1],
+            medians[2],
+            noise_stats[0],
+            noise_stats[1],
+            noise_stats[2]
         );
         if filtered.clipped_ratio > 0.1 {
             verbose_println!(
@@ -689,7 +712,8 @@ fn estimate_base_from_regions(image: &DecodedImage) -> Result<BaseEstimation, St
             if let Some(candidate) = candidates.iter().find(|c| c.rect == rect) {
                 verbose_println!(
                     "[BASE] Final fallback to {} (brightness {:.4})",
-                    candidate.label, candidate.brightness
+                    candidate.label,
+                    candidate.brightness
                 );
             } else {
                 verbose_println!("[BASE] Final fallback to brightest ROI");
@@ -802,7 +826,9 @@ fn validate_base_candidate(
     // Check if this appears to be B&W film
     let is_bw = is_likely_bw(medians);
     if is_bw {
-        verbose_println!("[BASE]   detected B&W film (low chroma), skipping orange mask validation");
+        verbose_println!(
+            "[BASE]   detected B&W film (low chroma), skipping orange mask validation"
+        );
         return (true, "B&W film - all channels similar".to_string());
     }
 
@@ -899,11 +925,7 @@ fn extract_border_pixels(image: &DecodedImage, border_percent: f32) -> Vec<[f32;
             if is_vertical_border || is_horizontal_border {
                 let idx = ((y * image.width + x) * 3) as usize;
                 if idx + 2 < image.data.len() {
-                    pixels.push([
-                        image.data[idx],
-                        image.data[idx + 1],
-                        image.data[idx + 2],
-                    ]);
+                    pixels.push([image.data[idx], image.data[idx + 1], image.data[idx + 2]]);
                 }
             }
         }
@@ -959,7 +981,9 @@ fn estimate_base_from_border(
     }
 
     if filtered.pixels.is_empty() {
-        return Err("No valid film base pixels found in border (all clipped or extreme)".to_string());
+        return Err(
+            "No valid film base pixels found in border (all clipped or extreme)".to_string(),
+        );
     }
 
     let (num_brightest, percentage, medians, noise_stats) =
@@ -967,11 +991,17 @@ fn estimate_base_from_border(
 
     verbose_println!(
         "[BASE] Border | using {} px ({:.1}%) brightest",
-        num_brightest, percentage
+        num_brightest,
+        percentage
     );
     verbose_println!(
         "[BASE]   medians=[{:.6}, {:.6}, {:.6}] noise=[{:.5}, {:.5}, {:.5}]",
-        medians[0], medians[1], medians[2], noise_stats[0], noise_stats[1], noise_stats[2]
+        medians[0],
+        medians[1],
+        medians[2],
+        noise_stats[0],
+        noise_stats[1],
+        noise_stats[2]
     );
 
     // Calculate average brightness for validation
@@ -1308,7 +1338,10 @@ fn estimate_base_roi_candidates(image: &DecodedImage) -> Vec<BaseRoiCandidate> {
 
     verbose_println!(
         "[BASE] Auto-detection brightnesses: top={:.4}, bottom={:.4}, left={:.4}, right={:.4}",
-        candidates[0].0, candidates[1].0, candidates[2].0, candidates[3].0
+        candidates[0].0,
+        candidates[1].0,
+        candidates[2].0,
+        candidates[3].0
     );
 
     // Create candidates from borders

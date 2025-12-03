@@ -5,7 +5,7 @@
 
 defaults:
   # Enable automatic level adjustment to optimize tonal range (true/false)
-  enable_auto_levels: true
+  enable_auto_levels: false
 
   # Percentage of pixels to clip when computing auto levels (0.0-100.0). Higher values are more aggressive.
   auto_levels_clip_percent: 0.25
@@ -46,7 +46,7 @@ defaults:
   shadow_lift_mode: Percentile
 
   # Shadow lift amount as a percentile value (0.0-1.0). Higher values lift shadows more.
-  shadow_lift_value: 0.02
+  shadow_lift_value: 0.2
 
   # Highlight compression factor (0.5-2.0+). Values > 1.0 compress highlights, < 1.0 expand them.
   highlight_compression: 0.5
@@ -67,10 +67,10 @@ defaults:
   auto_exposure_max_gain: 1.4
 
   # Manual exposure compensation multiplier (0.5-2.0+). 1.0 = no adjustment.
-  exposure_compensation: 1.0
+  exposure_compensation: 1
 
   # Skip applying film-specific tone curve during processing (true/false)
-  skip_tone_curve: true
+  skip_tone_curve: false
 
   # Skip applying color correction matrix during processing (true/false)
   skip_color_matrix: false

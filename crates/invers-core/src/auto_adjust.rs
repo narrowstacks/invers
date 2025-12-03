@@ -134,7 +134,11 @@ pub fn auto_white_balance_no_clip(data: &mut [f32], channels: u8, strength: f32)
         for value in data.iter_mut() {
             *value *= scale;
         }
-        [multipliers[0] * scale, multipliers[1] * scale, multipliers[2] * scale]
+        [
+            multipliers[0] * scale,
+            multipliers[1] * scale,
+            multipliers[2] * scale,
+        ]
     } else {
         multipliers
     }
@@ -249,9 +253,12 @@ pub fn auto_levels_no_clip(data: &mut [f32], channels: u8, clip_percent: f32) ->
     let num_pixels = data.len() / 3;
 
     // Compute clipped percentile ranges (same as regular auto-levels)
-    let (r_min, r_clip_max) = compute_clipped_range_from_histogram(&r_hist, num_pixels, clip_percent);
-    let (g_min, g_clip_max) = compute_clipped_range_from_histogram(&g_hist, num_pixels, clip_percent);
-    let (b_min, b_clip_max) = compute_clipped_range_from_histogram(&b_hist, num_pixels, clip_percent);
+    let (r_min, r_clip_max) =
+        compute_clipped_range_from_histogram(&r_hist, num_pixels, clip_percent);
+    let (g_min, g_clip_max) =
+        compute_clipped_range_from_histogram(&g_hist, num_pixels, clip_percent);
+    let (b_min, b_clip_max) =
+        compute_clipped_range_from_histogram(&b_hist, num_pixels, clip_percent);
 
     // First pass: apply normalization and find the new max
     let mut new_max = 0.0f32;
@@ -397,7 +404,12 @@ pub fn auto_levels_with_mode(
 /// - Per-channel output black/white points
 ///
 /// This is a comprehensive levels adjustment that goes beyond simple auto_levels.
-pub fn apply_levels_complete(data: &mut [f32], r: &LevelsParams, g: &LevelsParams, b: &LevelsParams) {
+pub fn apply_levels_complete(
+    data: &mut [f32],
+    r: &LevelsParams,
+    g: &LevelsParams,
+    b: &LevelsParams,
+) {
     for pixel in data.chunks_exact_mut(3) {
         pixel[0] = apply_levels_single(pixel[0], r);
         pixel[1] = apply_levels_single(pixel[1], g);

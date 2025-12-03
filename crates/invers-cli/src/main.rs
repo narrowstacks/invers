@@ -357,7 +357,9 @@ fn main() {
             silent,
             verbose,
             cpu,
-        } => cmd_batch(inputs, base_from, preset, export, out, threads, silent, verbose, cpu),
+        } => cmd_batch(
+            inputs, base_from, preset, export, out, threads, silent, verbose, cpu,
+        ),
 
         Commands::Preset { action } => match action {
             PresetAction::List { dir } => cmd_preset_list(dir),
@@ -489,7 +491,10 @@ fn cmd_convert(
                 }
             }
             if let Some(gamma) = profile.default_gamma {
-                println!("  Default gamma: [{:.2}, {:.2}, {:.2}]", gamma[0], gamma[1], gamma[2]);
+                println!(
+                    "  Default gamma: [{:.2}, {:.2}, {:.2}]",
+                    gamma[0], gamma[1], gamma[2]
+                );
             }
         }
         Some(profile)
@@ -570,16 +575,15 @@ fn cmd_convert(
     let use_gpu = !cpu_only;
 
     // Auto-detect B&W mode for grayscale/monochrome images (unless user specified a mode)
-    let effective_inversion_mode = if inversion_mode.is_none()
-        && (decoded.source_is_grayscale || decoded.is_monochrome)
-    {
-        if !silent {
-            println!("  Detected B&W image, using BlackAndWhite inversion mode");
-        }
-        Some(invers_core::models::InversionMode::BlackAndWhite)
-    } else {
-        inversion_mode
-    };
+    let effective_inversion_mode =
+        if inversion_mode.is_none() && (decoded.source_is_grayscale || decoded.is_monochrome) {
+            if !silent {
+                println!("  Detected B&W image, using BlackAndWhite inversion mode");
+            }
+            Some(invers_core::models::InversionMode::BlackAndWhite)
+        } else {
+            inversion_mode
+        };
 
     // Build conversion options using shared utility (with sensible defaults)
     let mut options = build_convert_options_full_with_gpu(
@@ -607,26 +611,54 @@ fn cmd_convert(
     if debug {
         eprintln!("\n[debug] Pipeline configuration:");
         eprintln!("  Inversion mode: {:?}", options.inversion_mode);
-        eprintln!("  Auto levels: {} (clip: {:.2}%)", options.enable_auto_levels, options.auto_levels_clip_percent);
+        eprintln!(
+            "  Auto levels: {} (clip: {:.2}%)",
+            options.enable_auto_levels, options.auto_levels_clip_percent
+        );
         eprintln!("  Preserve headroom: {}", options.preserve_headroom);
-        eprintln!("  Auto color: {} (strength: {:.2})", options.enable_auto_color, options.auto_color_strength);
-        eprintln!("  Auto color gain: [{:.2}, {:.2}]", options.auto_color_min_gain, options.auto_color_max_gain);
-        eprintln!("  Auto WB: {} (strength: {:.2})", options.enable_auto_wb, options.auto_wb_strength);
-        eprintln!("  Auto exposure: {} (target: {:.2}, strength: {:.2})",
-            options.enable_auto_exposure, options.auto_exposure_target_median, options.auto_exposure_strength);
-        eprintln!("  Exposure compensation: {:.2}", options.exposure_compensation);
-        eprintln!("  Shadow lift: {:?} (value: {:.3})", options.shadow_lift_mode, options.shadow_lift_value);
-        eprintln!("  Highlight compression: {:.2}", options.highlight_compression);
+        eprintln!(
+            "  Auto color: {} (strength: {:.2})",
+            options.enable_auto_color, options.auto_color_strength
+        );
+        eprintln!(
+            "  Auto color gain: [{:.2}, {:.2}]",
+            options.auto_color_min_gain, options.auto_color_max_gain
+        );
+        eprintln!(
+            "  Auto WB: {} (strength: {:.2})",
+            options.enable_auto_wb, options.auto_wb_strength
+        );
+        eprintln!(
+            "  Auto exposure: {} (target: {:.2}, strength: {:.2})",
+            options.enable_auto_exposure,
+            options.auto_exposure_target_median,
+            options.auto_exposure_strength
+        );
+        eprintln!(
+            "  Exposure compensation: {:.2}",
+            options.exposure_compensation
+        );
+        eprintln!(
+            "  Shadow lift: {:?} (value: {:.3})",
+            options.shadow_lift_mode, options.shadow_lift_value
+        );
+        eprintln!(
+            "  Highlight compression: {:.2}",
+            options.highlight_compression
+        );
         eprintln!("  Skip tone curve: {}", options.skip_tone_curve);
         eprintln!("  Skip color matrix: {}", options.skip_color_matrix);
-        eprintln!("  Base sampling: {:?} (brightest: {:.1}%)", options.base_sampling_mode, options.base_brightest_percent);
+        eprintln!(
+            "  Base sampling: {:?} (brightest: {:.1}%)",
+            options.base_sampling_mode, options.base_brightest_percent
+        );
         eprintln!("  GPU processing: {}", options.use_gpu);
         eprintln!();
     }
 
     // Check if we're using B&W mode (auto-detected or user-specified)
-    let using_bw_mode = effective_inversion_mode
-        == Some(invers_core::models::InversionMode::BlackAndWhite);
+    let using_bw_mode =
+        effective_inversion_mode == Some(invers_core::models::InversionMode::BlackAndWhite);
 
     // For B&W images/mode, disable color-specific operations
     if decoded.source_is_grayscale || decoded.is_monochrome || using_bw_mode {
@@ -1197,22 +1229,23 @@ fn cmd_init(force: bool) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "Could not determine home directory")?;
     let invers_dir = PathBuf::from(&home).join("invers");
 
-    println!("Initializing invers configuration in: {}", invers_dir.display());
+    println!(
+        "Initializing invers configuration in: {}",
+        invers_dir.display()
+    );
     println!();
 
     // Look for default presets in common Homebrew locations
     let share_locations = [
-        PathBuf::from("/opt/homebrew/opt/invers/share/invers"),  // Apple Silicon
-        PathBuf::from("/usr/local/opt/invers/share/invers"),     // Intel Mac
+        PathBuf::from("/opt/homebrew/opt/invers/share/invers"), // Apple Silicon
+        PathBuf::from("/usr/local/opt/invers/share/invers"),    // Intel Mac
         PathBuf::from("/home/linuxbrew/.linuxbrew/opt/invers/share/invers"), // Linux
     ];
 
-    let share_dir = share_locations
-        .iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| {
-            "Could not find invers share directory. Make sure invers is installed via Homebrew.".to_string()
-        })?;
+    let share_dir = share_locations.iter().find(|p| p.exists()).ok_or_else(|| {
+        "Could not find invers share directory. Make sure invers is installed via Homebrew."
+            .to_string()
+    })?;
 
     println!("Found default presets in: {}", share_dir.display());
     println!();
@@ -1263,7 +1296,12 @@ fn cmd_init(force: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir_contents(src: &PathBuf, dst: &PathBuf, force: bool, indent: &str) -> Result<(), String> {
+fn copy_dir_contents(
+    src: &PathBuf,
+    dst: &PathBuf,
+    force: bool,
+    indent: &str,
+) -> Result<(), String> {
     let entries = std::fs::read_dir(src)
         .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?;
 
@@ -1282,7 +1320,11 @@ fn copy_dir_contents(src: &PathBuf, dst: &PathBuf, force: bool, indent: &str) ->
                 .map_err(|e| format!("Failed to copy {}: {}", src_path.display(), e))?;
             println!("{}Copied: {}", indent, file_name.to_string_lossy());
         } else {
-            println!("{}Skipped: {} (exists)", indent, file_name.to_string_lossy());
+            println!(
+                "{}Skipped: {} (exists)",
+                indent,
+                file_name.to_string_lossy()
+            );
         }
     }
 
@@ -1347,7 +1389,8 @@ fn cmd_diagnose(
     } else {
         None
     };
-    let base_estimation = invers_core::pipeline::estimate_base(&decoded_original, roi_rect, None, None)?;
+    let base_estimation =
+        invers_core::pipeline::estimate_base(&decoded_original, roi_rect, None, None)?;
     println!(
         "   Base RGB: [{:.6}, {:.6}, {:.6}]",
         base_estimation.medians[0], base_estimation.medians[1], base_estimation.medians[2]

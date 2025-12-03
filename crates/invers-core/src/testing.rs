@@ -672,7 +672,8 @@ fn build_parameter_combinations(grid: &ParameterGrid) -> Vec<ParameterTest> {
                                     for &inversion_mode in &grid.inversion_mode {
                                         for &shadow_lift_mode in &grid.shadow_lift_mode {
                                             for &shadow_lift_value in &grid.shadow_lift_value {
-                                                for &tone_curve_strength in &grid.tone_curve_strength
+                                                for &tone_curve_strength in
+                                                    &grid.tone_curve_strength
                                                 {
                                                     for &exposure_compensation in
                                                         &grid.exposure_compensation
@@ -845,10 +846,7 @@ fn run_grid_search_with_context(
                     if let Ok(mut current_best) = best_score.lock() {
                         if result.overall_score < *current_best {
                             *current_best = result.overall_score;
-                            eprintln!(
-                                "[GRID SEARCH] New best score: {:.4}",
-                                result.overall_score
-                            );
+                            eprintln!("[GRID SEARCH] New best score: {:.4}", result.overall_score);
                         }
                     }
 

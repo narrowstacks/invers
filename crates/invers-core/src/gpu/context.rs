@@ -119,10 +119,7 @@ impl GpuContext {
                 .await
                 .map(|adapter| {
                     let info = adapter.get_info();
-                    format!(
-                        "{} ({:?}, {:?})",
-                        info.name, info.device_type, info.backend
-                    )
+                    format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend)
                 })
         })
     }

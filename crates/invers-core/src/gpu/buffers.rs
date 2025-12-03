@@ -1,8 +1,8 @@
 //! GPU buffer management for image data and parameters.
 
+use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use wgpu::{self, util::DeviceExt};
-use bytemuck::{Pod, Zeroable};
 
 use super::context::GpuError;
 
@@ -58,7 +58,8 @@ impl GpuImage {
 
     /// Download the GPU image data back to CPU.
     pub fn download(&self) -> Result<Vec<f32>, GpuError> {
-        let size = (self.width * self.height * self.channels) as u64 * std::mem::size_of::<f32>() as u64;
+        let size =
+            (self.width * self.height * self.channels) as u64 * std::mem::size_of::<f32>() as u64;
 
         // Create staging buffer for readback
         let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -309,12 +310,12 @@ pub struct GainParams {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct HslAdjustParams {
     // 8 color ranges split into vec4 pairs: R, O, Y, G (0) and A, B, P, M (1)
-    pub hue_adj_0: [f32; 4],  // R, O, Y, G
-    pub hue_adj_1: [f32; 4],  // A, B, P, M
-    pub sat_adj_0: [f32; 4],  // R, O, Y, G
-    pub sat_adj_1: [f32; 4],  // A, B, P, M
-    pub lum_adj_0: [f32; 4],  // R, O, Y, G
-    pub lum_adj_1: [f32; 4],  // A, B, P, M
+    pub hue_adj_0: [f32; 4], // R, O, Y, G
+    pub hue_adj_1: [f32; 4], // A, B, P, M
+    pub sat_adj_0: [f32; 4], // R, O, Y, G
+    pub sat_adj_1: [f32; 4], // A, B, P, M
+    pub lum_adj_0: [f32; 4], // R, O, Y, G
+    pub lum_adj_1: [f32; 4], // A, B, P, M
     pub pixel_count: u32,
     pub _padding: [u32; 3],
 }

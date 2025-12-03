@@ -242,7 +242,7 @@ impl MaskProfile {
         // Use standard dye impurity values from Observable notebook
         // These represent typical color negative film chemistry
         let magenta_impurity = 0.50; // Magenta dye's blue absorption
-        let cyan_impurity = 0.30;    // Cyan dye's green absorption
+        let cyan_impurity = 0.30; // Cyan dye's green absorption
 
         // Calculate how "orange" the base is to scale correction strength
         // A perfect orange mask has R > G > B with specific ratios

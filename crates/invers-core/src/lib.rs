@@ -23,4 +23,4 @@ pub use models::{BaseEstimation, ConvertOptions, FilmPreset, HslAdjustments, Sca
 
 // Re-export GPU functions when available
 #[cfg(feature = "gpu")]
-pub use gpu::{is_gpu_available, gpu_info, process_image_gpu};
+pub use gpu::{gpu_info, is_gpu_available, process_image_gpu};
