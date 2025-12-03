@@ -1100,13 +1100,58 @@ fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, 
 
 /// Compute per-channel medians from the brightest N pixels
 /// This samples the clearest film base without image content
+///
+/// For color negative film, we filter for pixels that match the orange mask
+/// characteristics (R > G > B with typical G/B ratio 1.3-2.0) before selecting
+/// the brightest pixels. This prevents scanner artifacts or edge effects with
+/// elevated blue from skewing the base estimation.
 fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize) -> [f32; 3] {
     if pixels.is_empty() {
         return [0.0, 0.0, 0.0];
     }
 
+    // First, filter for pixels that match orange mask characteristics
+    // Orange mask: R > G > B, with G/B ratio typically 1.3-2.0
+    let orange_mask_pixels: Vec<[f32; 3]> = pixels
+        .iter()
+        .filter(|p| {
+            let [r, g, b] = **p;
+            // Require minimum brightness in each channel
+            if r < 0.3 || g < 0.2 || b < 0.1 {
+                return false;
+            }
+            // Require orange mask channel ordering
+            if !(r > g && g > b) {
+                return false;
+            }
+            // Check G/B ratio is in typical orange mask range
+            // Tighter range (1.35-2.2) to exclude pixels with elevated blue
+            // from scanner artifacts or edge effects
+            let gb_ratio = g / b;
+            (1.35..=2.2).contains(&gb_ratio)
+        })
+        .copied()
+        .collect();
+
+    // If we have enough orange-mask pixels, use those; otherwise fall back to all pixels
+    let working_pixels = if orange_mask_pixels.len() >= num_pixels.min(100) {
+        verbose_println!(
+            "[BASE]   filtered {} of {} pixels as orange-mask-like",
+            orange_mask_pixels.len(),
+            pixels.len()
+        );
+        orange_mask_pixels
+    } else {
+        verbose_println!(
+            "[BASE]   only {} orange-mask pixels found, using all {} pixels",
+            orange_mask_pixels.len(),
+            pixels.len()
+        );
+        pixels.to_vec()
+    };
+
     // Create a vec of (brightness, pixel) tuples
-    let mut brightness_pixels: Vec<(f32, [f32; 3])> = pixels
+    let mut brightness_pixels: Vec<(f32, [f32; 3])> = working_pixels
         .iter()
         .map(|p| {
             let brightness = p[0] + p[1] + p[2]; // Sum of RGB as brightness

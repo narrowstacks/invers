@@ -77,6 +77,14 @@ enum Commands {
         /// Strength of auto white balance correction (0.0-1.0, default 1.0)
         #[arg(long, value_name = "FLOAT", default_value = "1.0")]
         auto_wb_strength: f32,
+
+        /// Enable verbose output (config loading, processing details)
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Enable debug output (detailed pipeline parameters)
+        #[arg(long)]
+        debug: bool,
     },
 
     /// Analyze image and estimate film base color
@@ -308,6 +316,8 @@ fn main() {
             cpu,
             auto_wb,
             auto_wb_strength,
+            verbose,
+            debug,
         } => cmd_convert(
             input,
             out,
@@ -323,6 +333,8 @@ fn main() {
             cpu,
             auto_wb,
             auto_wb_strength,
+            verbose,
+            debug,
         ),
 
         Commands::Analyze {
@@ -429,8 +441,16 @@ fn cmd_convert(
     cpu_only: bool,
     auto_wb: bool,
     auto_wb_strength: f32,
+    verbose: bool,
+    debug: bool,
 ) -> Result<(), String> {
     let start_time = Instant::now();
+
+    // Set verbose mode for core library and log config source
+    if verbose || debug {
+        invers_core::config::set_verbose(true);
+        invers_core::config::log_config_usage();
+    }
 
     if !silent {
         println!("Converting {} to positive...", input.display());
@@ -579,9 +599,30 @@ fn cmd_convert(
         false, // no_clip - use default
         auto_wb,
         auto_wb_strength,
-        false, // debug - disabled
+        debug,
         use_gpu,
     )?;
+
+    // Debug output: show pipeline configuration
+    if debug {
+        eprintln!("\n[debug] Pipeline configuration:");
+        eprintln!("  Inversion mode: {:?}", options.inversion_mode);
+        eprintln!("  Auto levels: {} (clip: {:.2}%)", options.enable_auto_levels, options.auto_levels_clip_percent);
+        eprintln!("  Preserve headroom: {}", options.preserve_headroom);
+        eprintln!("  Auto color: {} (strength: {:.2})", options.enable_auto_color, options.auto_color_strength);
+        eprintln!("  Auto color gain: [{:.2}, {:.2}]", options.auto_color_min_gain, options.auto_color_max_gain);
+        eprintln!("  Auto WB: {} (strength: {:.2})", options.enable_auto_wb, options.auto_wb_strength);
+        eprintln!("  Auto exposure: {} (target: {:.2}, strength: {:.2})",
+            options.enable_auto_exposure, options.auto_exposure_target_median, options.auto_exposure_strength);
+        eprintln!("  Exposure compensation: {:.2}", options.exposure_compensation);
+        eprintln!("  Shadow lift: {:?} (value: {:.3})", options.shadow_lift_mode, options.shadow_lift_value);
+        eprintln!("  Highlight compression: {:.2}", options.highlight_compression);
+        eprintln!("  Skip tone curve: {}", options.skip_tone_curve);
+        eprintln!("  Skip color matrix: {}", options.skip_color_matrix);
+        eprintln!("  Base sampling: {:?} (brightest: {:.1}%)", options.base_sampling_mode, options.base_brightest_percent);
+        eprintln!("  GPU processing: {}", options.use_gpu);
+        eprintln!();
+    }
 
     // Check if we're using B&W mode (auto-detected or user-specified)
     let using_bw_mode = effective_inversion_mode

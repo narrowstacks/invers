@@ -1,25 +1,25 @@
 class Invers < Formula
   desc "Professional-grade film negative to positive conversion tool"
   homepage "https://github.com/narrowstacks/invers"
-  version "0.2.4"
+  version "0.2.5"
   license any_of: ["MIT"]
 
   on_macos do
     on_intel do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-x86_64-apple-darwin.tar.gz"
-      sha256 "97d406681b9009ae488c37f820eb813d22adaca5bedff7ab8725fb70c8a04f71"
+      sha256 "5bc76f09d449b6098db541518a5fefc95f44cc50f2d441e1c2c3ee153d044e49"
     end
 
     on_arm do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-aarch64-apple-darwin.tar.gz"
-      sha256 "693f9e1d5261de5bc504346431baeb1eab48d32e70babc03c28e227452e2ccf4"
+      sha256 "dc52c87a23d59ce9280ec0be10d96506cc569025cdbb6d18037b36f6ec11ce53"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "50663501b34e415ca6b6e2b141725e991e9f883927c5267eac0b6d5a5af1d33e"
+      sha256 "77d03068e24805fd9f3bca92438f64e3e7f1590294aecba03ec943f08f2302b1"
     end
   end
 
