@@ -85,7 +85,8 @@ impl GpuImage {
         let (tx, rx) = std::sync::mpsc::channel();
 
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
+            // Ignore send error - if receiver is dropped, the recv() call will fail appropriately
+            let _ = tx.send(result);
         });
 
         self.device.poll(wgpu::Maintain::Wait);
@@ -219,7 +220,8 @@ impl GpuHistogram {
         let (tx, rx) = std::sync::mpsc::channel();
 
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
+            // Ignore send error - if receiver is dropped, the recv() call will fail appropriately
+            let _ = tx.send(result);
         });
 
         device.poll(wgpu::Maintain::Wait);

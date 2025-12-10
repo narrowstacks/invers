@@ -5,6 +5,36 @@
 use crate::models::{FilmPreset, ScanProfile};
 use std::path::Path;
 
+/// Validate a preset name to prevent path traversal attacks.
+/// Rejects names containing path separators, "..", or other dangerous patterns.
+pub fn validate_preset_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Preset name cannot be empty".to_string());
+    }
+
+    // Reject path separators
+    if name.contains('/') || name.contains('\\') {
+        return Err("Preset name cannot contain path separators".to_string());
+    }
+
+    // Reject parent directory references
+    if name.contains("..") {
+        return Err("Preset name cannot contain '..'".to_string());
+    }
+
+    // Reject names that start with a dot (hidden files)
+    if name.starts_with('.') {
+        return Err("Preset name cannot start with '.'".to_string());
+    }
+
+    // Reject null bytes
+    if name.contains('\0') {
+        return Err("Preset name cannot contain null bytes".to_string());
+    }
+
+    Ok(())
+}
+
 /// Load a film preset from a YAML file
 pub fn load_film_preset<P: AsRef<Path>>(path: P) -> Result<FilmPreset, String> {
     let path = path.as_ref();

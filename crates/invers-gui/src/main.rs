@@ -909,7 +909,9 @@ impl InversApp {
         if let Some(ref path) = self.loaded_path {
             ui.label(format!(
                 "File: {}",
-                path.file_name().unwrap().to_string_lossy()
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Unknown".to_string())
             ));
         }
     }

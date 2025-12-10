@@ -1067,7 +1067,9 @@ fn compute_exposure_gain_cpu(
     // Find median
     let mid = luminances.len() / 2;
     let median = *luminances
-        .select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap())
+        .select_nth_unstable_by(mid, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        })
         .1;
 
     // Compute gain to reach target

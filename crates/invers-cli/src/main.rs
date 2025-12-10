@@ -1161,6 +1161,8 @@ fn cmd_preset_show(preset: String) -> Result<(), String> {
     let preset_obj = if preset_path.exists() {
         invers_core::presets::load_film_preset(&preset_path)?
     } else {
+        // Validate preset name before constructing path to prevent path traversal
+        invers_core::presets::validate_preset_name(&preset)?;
         // Try to find it in the presets directory
         let dir = invers_core::presets::get_presets_dir()
             .unwrap_or_else(|_| PathBuf::from("profiles/film"));
@@ -1308,7 +1310,9 @@ fn copy_dir_contents(
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let src_path = entry.path();
-        let file_name = src_path.file_name().unwrap();
+        let file_name = src_path
+            .file_name()
+            .ok_or_else(|| format!("Invalid path (no filename): {}", src_path.display()))?;
         let dst_path = dst.join(file_name);
 
         if src_path.is_dir() {

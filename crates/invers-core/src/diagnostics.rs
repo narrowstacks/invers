@@ -102,7 +102,9 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
 
     // Use partial sort for median - only sort what we need
     let mid = sorted.len() / 2;
-    sorted.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    sorted.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
     let median = sorted[mid];
 
     // Compute standard deviation in a single pass
@@ -116,7 +118,9 @@ fn compute_channel_stats(data: &[f32]) -> ChannelStats {
     for p in percentile_values {
         let idx = ((p as f32 / 100.0) * (sorted.len() - 1) as f32).round() as usize;
         // Use select_nth_unstable for each percentile
-        sorted.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap());
+        sorted.select_nth_unstable_by(idx, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
         percentiles.push((p, sorted[idx]));
     }
 
@@ -253,7 +257,9 @@ fn find_representative_pixel(
     candidates.sort_by(|a, b| {
         let dist_a = (a.2 - target).abs();
         let dist_b = (b.2 - target).abs();
-        dist_a.partial_cmp(&dist_b).unwrap()
+        dist_a
+            .partial_cmp(&dist_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     Ok((candidates[0].0, candidates[0].1))
