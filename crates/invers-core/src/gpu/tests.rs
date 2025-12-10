@@ -3,6 +3,7 @@
 use super::*;
 use crate::decoders::DecodedImage;
 
+#[allow(dead_code)]
 const TOLERANCE: f32 = 1e-4; // Allow small floating-point variance
 
 /// Generate a test gradient image
@@ -28,6 +29,8 @@ fn generate_test_gradient(width: u32, height: u32) -> DecodedImage {
         black_level: None,
         white_level: None,
         color_matrix: None,
+        is_monochrome: false,
+        source_is_grayscale: false,
     }
 }
 
@@ -205,6 +208,8 @@ fn generate_test_negative(width: u32, height: u32) -> DecodedImage {
         black_level: None,
         white_level: None,
         color_matrix: None,
+        is_monochrome: false,
+        source_is_grayscale: false,
     }
 }
 
@@ -253,6 +258,7 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
         auto_exposure_max_gain: 2.0,
         no_clip: true, // Preserve full range for comparison
         enable_auto_wb: false,
+        auto_wb_strength: 0.5,
         use_gpu,
     }
 }

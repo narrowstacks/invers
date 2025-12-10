@@ -154,13 +154,15 @@ impl GpuContext {
 
         // Request device with required features and higher buffer limits for large images
         // Large scans (e.g., 4000x6000 @ 48-bit) can exceed 200MB
-        let mut limits = wgpu::Limits::default();
-        // Request max storage buffer size from adapter (for image data)
-        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-        // Also increase uniform buffer size if needed
-        limits.max_uniform_buffer_binding_size = adapter_limits.max_uniform_buffer_binding_size;
-        // Increase buffer size limit
-        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        let limits = wgpu::Limits {
+            // Request max storage buffer size from adapter (for image data)
+            max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
+            // Also increase uniform buffer size if needed
+            max_uniform_buffer_binding_size: adapter_limits.max_uniform_buffer_binding_size,
+            // Increase buffer size limit
+            max_buffer_size: adapter_limits.max_buffer_size,
+            ..Default::default()
+        };
 
         let (device, queue) = adapter
             .request_device(

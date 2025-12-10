@@ -31,3 +31,4 @@ target/
 OPTIMIZATION_SUMMARY.md
 
 docs/
+.claude/settings.local.json

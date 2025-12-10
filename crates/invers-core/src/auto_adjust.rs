@@ -1238,7 +1238,7 @@ fn auto_exposure_impl(
         }
     } else {
         for value in data.iter_mut() {
-            *value = *value * gain;
+            *value *= gain;
         }
     }
 
@@ -1329,15 +1329,8 @@ mod tests {
     fn test_otsu_threshold_bimodal() {
         // Create truly bimodal distribution with clear separation
         // All low values exactly at 0.2, all high values exactly at 0.8
-        let mut data = Vec::new();
-        // Low cluster: 500 samples at 0.2
-        for _ in 0..500 {
-            data.push(0.2);
-        }
-        // High cluster: 500 samples at 0.8
-        for _ in 0..500 {
-            data.push(0.8);
-        }
+        let mut data = vec![0.2; 500]; // Low cluster: 500 samples at 0.2
+        data.extend(vec![0.8; 500]); // High cluster: 500 samples at 0.8
 
         let result = otsu_threshold(&data);
 
@@ -1364,19 +1357,9 @@ mod tests {
     #[test]
     fn test_measure_dark_mid_light() {
         // Create data with known distribution
-        let mut data = Vec::new();
-        // 25% dark (0.0-0.25)
-        for _ in 0..25 {
-            data.push(0.1);
-        }
-        // 50% mid (0.25-0.75)
-        for _ in 0..50 {
-            data.push(0.5);
-        }
-        // 25% light (0.75-1.0)
-        for _ in 0..25 {
-            data.push(0.9);
-        }
+        let mut data = vec![0.1; 25]; // 25% dark (0.0-0.25)
+        data.extend(vec![0.5; 50]); // 50% mid (0.25-0.75)
+        data.extend(vec![0.9; 25]); // 25% light (0.75-1.0)
 
         let (dark, mid, light) = measure_dark_mid_light(&data);
 

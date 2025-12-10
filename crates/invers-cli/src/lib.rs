@@ -163,6 +163,7 @@ pub fn parse_inversion_mode(
 ///
 /// This function centralizes the logic for building ConvertOptions with all
 /// pipeline defaults, making it reusable across CLI and GUI applications.
+#[allow(clippy::too_many_arguments)]
 pub fn build_convert_options(
     input: PathBuf,
     output_dir: PathBuf,
@@ -191,6 +192,7 @@ pub fn build_convert_options(
 }
 
 /// Build a ConvertOptions struct with explicit inversion mode override
+#[allow(clippy::too_many_arguments)]
 pub fn build_convert_options_with_inversion(
     input: PathBuf,
     output_dir: PathBuf,
@@ -225,6 +227,7 @@ pub fn build_convert_options_with_inversion(
 }
 
 /// Build a ConvertOptions struct with all options
+#[allow(clippy::too_many_arguments)]
 pub fn build_convert_options_full(
     input: PathBuf,
     output_dir: PathBuf,
@@ -266,6 +269,7 @@ pub fn build_convert_options_full(
 }
 
 /// Build a ConvertOptions struct with all options including GPU control
+#[allow(clippy::too_many_arguments)]
 pub fn build_convert_options_full_with_gpu(
     input: PathBuf,
     output_dir: PathBuf,

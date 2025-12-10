@@ -270,7 +270,7 @@ pub fn process_image(
             let safe_exposure = options.exposure_compensation.min(1.0);
             if safe_exposure < 1.0 {
                 for value in data.iter_mut() {
-                    *value = *value * safe_exposure;
+                    *value *= safe_exposure;
                 }
             }
             if options.debug && options.exposure_compensation > 1.0 {
@@ -507,6 +507,7 @@ fn estimate_base_from_manual_roi(
 /// - Near-white clipped pixels (all channels > 0.95)
 /// - Very dark pixels (all channels < 0.05)
 /// - Bright grayscale pixels without color variation (not orange mask)
+///
 /// Filter results from base pixel filtering
 struct FilteredBasePixels {
     /// Valid pixels that passed filtering
@@ -1084,9 +1085,9 @@ fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, 
         let mut peak_bin = min_bin;
         let mut peak_count = 0u32;
 
-        for bin in min_bin..=max_bin {
-            if hist[bin] > peak_count {
-                peak_count = hist[bin];
+        for (bin, &count) in hist.iter().enumerate().take(max_bin + 1).skip(min_bin) {
+            if count > peak_count {
+                peak_count = count;
                 peak_bin = bin;
             }
         }
@@ -1503,7 +1504,7 @@ pub fn invert_negative(
             let mask_profile = base
                 .mask_profile
                 .clone()
-                .unwrap_or_else(crate::models::MaskProfile::default);
+                .unwrap_or_default();
 
             // Calculate shadow floor values
             let (_red_floor, green_floor, blue_floor) = mask_profile.calculate_shadow_floors();

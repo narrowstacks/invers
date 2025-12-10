@@ -428,6 +428,7 @@ fn main() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_convert(
     input: PathBuf,
     out: Option<PathBuf>,
@@ -824,7 +825,7 @@ fn cmd_analyze(
     // Parse base estimation method
     let method = match base_method.to_lowercase().as_str() {
         "border" => invers_core::models::BaseEstimationMethod::Border,
-        "regions" | _ => invers_core::models::BaseEstimationMethod::Regions,
+        _ => invers_core::models::BaseEstimationMethod::Regions,
     };
 
     // Estimate base
@@ -927,6 +928,7 @@ fn cmd_analyze(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_batch(
     inputs: Vec<PathBuf>,
     base_from: Option<PathBuf>,
@@ -1299,8 +1301,8 @@ fn cmd_init(force: bool) -> Result<(), String> {
 }
 
 fn copy_dir_contents(
-    src: &PathBuf,
-    dst: &PathBuf,
+    src: &std::path::Path,
+    dst: &std::path::Path,
     force: bool,
     indent: &str,
 ) -> Result<(), String> {
@@ -1335,6 +1337,7 @@ fn copy_dir_contents(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_diagnose(
     original: PathBuf,
     third_party: PathBuf,
@@ -1459,6 +1462,7 @@ fn cmd_diagnose(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_test_params(
     original: PathBuf,
     reference: PathBuf,

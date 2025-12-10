@@ -401,7 +401,7 @@ fn clear_histogram(ctx: &GpuContext, histogram: &GpuHistogram) -> Result<(), Gpu
         pass.set_pipeline(&ctx.pipelines.histogram_clear);
         pass.set_bind_group(0, &bind_group, &[]);
 
-        let workgroups = (NUM_HISTOGRAM_BUCKETS as u32 + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let workgroups = (NUM_HISTOGRAM_BUCKETS as u32).div_ceil(WORKGROUP_SIZE);
         pass.dispatch_workgroups(workgroups, 1, 1);
     }
 
@@ -501,14 +501,14 @@ fn accumulate_histogram(
         pass.set_bind_group(0, &bind_group, &[]);
 
         let pixel_count = image.pixel_count();
-        let total_workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let total_workgroups = pixel_count.div_ceil(WORKGROUP_SIZE);
 
         // Use 2D dispatch for large images
         let (workgroups_x, workgroups_y) = if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
             (total_workgroups, 1)
         } else {
             let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
-            let other = (total_workgroups + side - 1) / side;
+            let other = total_workgroups.div_ceil(side);
             (side, other.min(MAX_WORKGROUPS_PER_DIM))
         };
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
@@ -784,6 +784,7 @@ fn clamp_working_range(
 const MAX_WORKGROUPS_PER_DIM: u32 = 65535;
 
 /// Maximum pixels per single dispatch (65535 workgroups * 256 threads)
+#[allow(dead_code)]
 const MAX_PIXELS_PER_DISPATCH: u32 = MAX_WORKGROUPS_PER_DIM * WORKGROUP_SIZE;
 
 /// Generic compute dispatch for storage + uniform pattern
@@ -838,7 +839,7 @@ fn dispatch_compute(
         ],
     });
 
-    let total_workgroups = (pixel_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+    let total_workgroups = pixel_count.div_ceil(WORKGROUP_SIZE);
 
     // If within limits, do a single dispatch
     if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
@@ -865,7 +866,7 @@ fn dispatch_compute(
         // This allows up to 65535 * 65535 workgroups = ~4 billion workgroups
         // Calculate grid dimensions: try to make it roughly square for efficiency
         let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
-        let workgroups_y = (total_workgroups + side - 1) / side;
+        let workgroups_y = total_workgroups.div_ceil(side);
 
         if workgroups_y > MAX_WORKGROUPS_PER_DIM {
             return Err(GpuError::Other(format!(
@@ -902,7 +903,7 @@ fn dispatch_compute(
 /// CPU-side base estimation (statistical analysis)
 fn estimate_base_cpu(decoded: &DecodedImage, _options: &ConvertOptions) -> BaseEstimation {
     // Delegate to the existing CPU implementation
-    crate::pipeline::estimate_base(decoded, None, None, None).unwrap_or_else(|_| BaseEstimation {
+    crate::pipeline::estimate_base(decoded, None, None, None).unwrap_or(BaseEstimation {
         roi: None,
         medians: [0.5, 0.5, 0.5],
         noise_stats: None,
@@ -978,10 +979,10 @@ fn compute_auto_color_gains(
         let mut sum: f64 = 0.0;
         let mut count: u64 = 0;
 
-        for i in low_idx..=high_idx.min(buckets - 1) {
+        for (i, &bin_count) in hist.iter().enumerate().take(high_idx.min(buckets - 1) + 1).skip(low_idx) {
             let value = i as f64 / buckets as f64;
-            sum += value * hist[i] as f64;
-            count += hist[i] as u64;
+            sum += value * bin_count as f64;
+            count += bin_count as u64;
         }
 
         if count > 0 {
