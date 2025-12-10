@@ -979,7 +979,12 @@ fn compute_auto_color_gains(
         let mut sum: f64 = 0.0;
         let mut count: u64 = 0;
 
-        for (i, &bin_count) in hist.iter().enumerate().take(high_idx.min(buckets - 1) + 1).skip(low_idx) {
+        for (i, &bin_count) in hist
+            .iter()
+            .enumerate()
+            .take(high_idx.min(buckets - 1) + 1)
+            .skip(low_idx)
+        {
             let value = i as f64 / buckets as f64;
             sum += value * bin_count as f64;
             count += bin_count as u64;

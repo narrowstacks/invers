@@ -1501,10 +1501,7 @@ pub fn invert_negative(
             // 3. Apply shadow correction: corrected = (value - floor) / (1 - floor)
 
             // Get mask profile (auto-detected or use default)
-            let mask_profile = base
-                .mask_profile
-                .clone()
-                .unwrap_or_default();
+            let mask_profile = base.mask_profile.clone().unwrap_or_default();
 
             // Calculate shadow floor values
             let (_red_floor, green_floor, blue_floor) = mask_profile.calculate_shadow_floors();
