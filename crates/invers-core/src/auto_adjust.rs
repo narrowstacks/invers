@@ -3,7 +3,174 @@
 //! Provides auto-levels, auto-color, auto white balance, and other automatic
 //! corrections similar to Photoshop's automatic adjustment tools.
 
+use rayon::prelude::*;
 use std::cmp::Ordering;
+
+/// Minimum number of pixels to trigger parallel processing
+const PARALLEL_THRESHOLD: usize = 30_000;
+
+// =============================================================================
+// Color Temperature to RGB Conversion
+// =============================================================================
+
+/// Convert color temperature in Kelvin to RGB multipliers
+///
+/// Based on Tanner Helland's algorithm which approximates the Planckian locus.
+/// Reference: https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html
+///
+/// # Arguments
+/// * `kelvin` - Color temperature in Kelvin (1000-40000)
+///
+/// # Returns
+/// RGB multipliers normalized to green channel = 1.0
+pub fn kelvin_to_rgb_multipliers(kelvin: f32) -> [f32; 3] {
+    // Clamp temperature to valid range
+    let temp = (kelvin / 100.0).clamp(10.0, 400.0);
+
+    // Calculate RGB values using polynomial approximation
+    let (r, g, b) = if temp <= 66.0 {
+        // For temperatures <= 6600K
+        let r = 255.0;
+        let g = 99.4708025861 * temp.ln() - 161.1195681661;
+        let b = if temp <= 19.0 {
+            0.0
+        } else {
+            138.5177312231 * (temp - 10.0).ln() - 305.0447927307
+        };
+        (r, g.clamp(0.0, 255.0), b.clamp(0.0, 255.0))
+    } else {
+        // For temperatures > 6600K
+        let r = 329.698727446 * (temp - 60.0).powf(-0.1332047592);
+        let g = 288.1221695283 * (temp - 60.0).powf(-0.0755148492);
+        let b = 255.0;
+        (r.clamp(0.0, 255.0), g.clamp(0.0, 255.0), b)
+    };
+
+    // Normalize to 0-1 range
+    let r = r / 255.0;
+    let g = g / 255.0;
+    let b = b / 255.0;
+
+    // Convert to multipliers (normalize to green)
+    // To correct from temperature T to neutral (D65 ~6500K), we need
+    // to apply the inverse of what that temperature produces
+    let g_ref = g.max(0.001);
+    [g_ref / r.max(0.001), 1.0, g_ref / b.max(0.001)]
+}
+
+/// Apply white balance from temperature and tint
+///
+/// # Arguments
+/// * `data` - Interleaved RGB pixel data
+/// * `channels` - Number of channels (must be 3)
+/// * `temperature` - Color temperature in Kelvin (e.g., 5500 for daylight)
+/// * `tint` - Green-magenta tint adjustment (-100 to +100, 0 = neutral)
+///
+/// # Returns
+/// The RGB multipliers that were applied
+pub fn apply_white_balance_from_temperature(
+    data: &mut [f32],
+    channels: u8,
+    temperature: f32,
+    tint: f32,
+) -> [f32; 3] {
+    if channels != 3 {
+        panic!("apply_white_balance_from_temperature only supports 3-channel RGB images");
+    }
+
+    // Get base multipliers from temperature
+    let mut multipliers = kelvin_to_rgb_multipliers(temperature);
+
+    // Apply tint adjustment (affects green-magenta axis)
+    // Positive tint = more green, negative = more magenta
+    let tint_factor = 1.0 + tint / 200.0; // ±0.5 adjustment range
+    multipliers[1] *= tint_factor;
+
+    // Apply multipliers to the image
+    let num_pixels = data.len() / 3;
+    if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            pixel[0] *= multipliers[0];
+            pixel[1] *= multipliers[1];
+            pixel[2] *= multipliers[2];
+        });
+    } else {
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] *= multipliers[0];
+            pixel[1] *= multipliers[1];
+            pixel[2] *= multipliers[2];
+        }
+    }
+
+    multipliers
+}
+
+// =============================================================================
+// White Balance Statistics
+// =============================================================================
+
+/// Statistics accumulated during white balance analysis
+#[derive(Clone, Copy, Default)]
+struct WbStats {
+    highlight_r_sum: f64,
+    highlight_g_sum: f64,
+    highlight_b_sum: f64,
+    highlight_count: usize,
+    gray_r_sum: f64,
+    gray_g_sum: f64,
+    gray_b_sum: f64,
+    gray_count: usize,
+    total_r_sum: f64,
+    total_g_sum: f64,
+    total_b_sum: f64,
+    total_count: usize,
+}
+
+impl WbStats {
+    fn merge(mut self, other: Self) -> Self {
+        self.highlight_r_sum += other.highlight_r_sum;
+        self.highlight_g_sum += other.highlight_g_sum;
+        self.highlight_b_sum += other.highlight_b_sum;
+        self.highlight_count += other.highlight_count;
+        self.gray_r_sum += other.gray_r_sum;
+        self.gray_g_sum += other.gray_g_sum;
+        self.gray_b_sum += other.gray_b_sum;
+        self.gray_count += other.gray_count;
+        self.total_r_sum += other.total_r_sum;
+        self.total_g_sum += other.total_g_sum;
+        self.total_b_sum += other.total_b_sum;
+        self.total_count += other.total_count;
+        self
+    }
+
+    fn accumulate_pixel(&mut self, r: f32, g: f32, b: f32) {
+        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // Highlight pixels (bright areas)
+        if lum > 0.6 {
+            self.highlight_r_sum += r as f64;
+            self.highlight_g_sum += g as f64;
+            self.highlight_b_sum += b as f64;
+            self.highlight_count += 1;
+        }
+
+        // Gray pixels (low saturation - channels are similar)
+        let max_ch = r.max(g).max(b);
+        let min_ch = r.min(g).min(b);
+        if max_ch > 0.1 && (max_ch - min_ch) / max_ch < 0.15 {
+            self.gray_r_sum += r as f64;
+            self.gray_g_sum += g as f64;
+            self.gray_b_sum += b as f64;
+            self.gray_count += 1;
+        }
+
+        // Always accumulate totals for fallback
+        self.total_r_sum += r as f64;
+        self.total_g_sum += g as f64;
+        self.total_b_sum += b as f64;
+        self.total_count += 1;
+    }
+}
 
 /// Auto white balance: Estimate and correct color temperature/tint
 ///
@@ -17,73 +184,45 @@ pub fn auto_white_balance(data: &mut [f32], channels: u8, strength: f32) -> [f32
         panic!("auto_white_balance only supports 3-channel RGB images");
     }
 
-    // Find pixels in the highlight region (top 10% brightness)
-    // These are most likely to be neutral (sky, clouds, white objects)
-    let mut highlight_r_sum = 0.0f64;
-    let mut highlight_g_sum = 0.0f64;
-    let mut highlight_b_sum = 0.0f64;
-    let mut highlight_count = 0usize;
+    let num_pixels = data.len() / 3;
 
-    // Also collect "gray" pixels where R≈G≈B (likely neutral)
-    let mut gray_r_sum = 0.0f64;
-    let mut gray_g_sum = 0.0f64;
-    let mut gray_b_sum = 0.0f64;
-    let mut gray_count = 0usize;
-
-    for pixel in data.chunks_exact(3) {
-        let r = pixel[0];
-        let g = pixel[1];
-        let b = pixel[2];
-        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-
-        // Highlight pixels (bright areas)
-        if lum > 0.6 {
-            highlight_r_sum += r as f64;
-            highlight_g_sum += g as f64;
-            highlight_b_sum += b as f64;
-            highlight_count += 1;
+    // Collect statistics - parallel for large images
+    let stats = if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact(3)
+            .fold(WbStats::default, |mut stats, pixel| {
+                stats.accumulate_pixel(pixel[0], pixel[1], pixel[2]);
+                stats
+            })
+            .reduce(WbStats::default, WbStats::merge)
+    } else {
+        let mut stats = WbStats::default();
+        for pixel in data.chunks_exact(3) {
+            stats.accumulate_pixel(pixel[0], pixel[1], pixel[2]);
         }
+        stats
+    };
 
-        // Gray pixels (low saturation - channels are similar)
-        let max_ch = r.max(g).max(b);
-        let min_ch = r.min(g).min(b);
-        if max_ch > 0.1 && (max_ch - min_ch) / max_ch < 0.15 {
-            gray_r_sum += r as f64;
-            gray_g_sum += g as f64;
-            gray_b_sum += b as f64;
-            gray_count += 1;
-        }
-    }
-
-    // Prefer gray pixels if we have enough, otherwise use highlights
-    let (r_avg, g_avg, b_avg) = if gray_count > 1000 {
+    // Prefer gray pixels if we have enough, otherwise use highlights, then fallback to total
+    let (r_avg, g_avg, b_avg) = if stats.gray_count > 1000 {
         (
-            (gray_r_sum / gray_count as f64) as f32,
-            (gray_g_sum / gray_count as f64) as f32,
-            (gray_b_sum / gray_count as f64) as f32,
+            (stats.gray_r_sum / stats.gray_count as f64) as f32,
+            (stats.gray_g_sum / stats.gray_count as f64) as f32,
+            (stats.gray_b_sum / stats.gray_count as f64) as f32,
         )
-    } else if highlight_count > 100 {
+    } else if stats.highlight_count > 100 {
         (
-            (highlight_r_sum / highlight_count as f64) as f32,
-            (highlight_g_sum / highlight_count as f64) as f32,
-            (highlight_b_sum / highlight_count as f64) as f32,
+            (stats.highlight_r_sum / stats.highlight_count as f64) as f32,
+            (stats.highlight_g_sum / stats.highlight_count as f64) as f32,
+            (stats.highlight_b_sum / stats.highlight_count as f64) as f32,
+        )
+    } else if stats.total_count > 0 {
+        (
+            (stats.total_r_sum / stats.total_count as f64) as f32,
+            (stats.total_g_sum / stats.total_count as f64) as f32,
+            (stats.total_b_sum / stats.total_count as f64) as f32,
         )
     } else {
-        // Fallback: use overall average
-        let mut total_r = 0.0f64;
-        let mut total_g = 0.0f64;
-        let mut total_b = 0.0f64;
-        let count = data.len() / 3;
-        for pixel in data.chunks_exact(3) {
-            total_r += pixel[0] as f64;
-            total_g += pixel[1] as f64;
-            total_b += pixel[2] as f64;
-        }
-        (
-            (total_r / count as f64) as f32,
-            (total_g / count as f64) as f32,
-            (total_b / count as f64) as f32,
-        )
+        return [1.0, 1.0, 1.0];
     };
 
     // Calculate multipliers to make the reference neutral
@@ -97,11 +236,19 @@ pub fn auto_white_balance(data: &mut [f32], channels: u8, strength: f32) -> [f32
     let g_final = 1.0 + strength * (g_mult - 1.0);
     let b_final = 1.0 + strength * (b_mult - 1.0);
 
-    // Apply multipliers
-    for pixel in data.chunks_exact_mut(3) {
-        pixel[0] *= r_final;
-        pixel[1] *= g_final;
-        pixel[2] *= b_final;
+    // Apply multipliers - parallel for large images
+    if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            pixel[0] *= r_final;
+            pixel[1] *= g_final;
+            pixel[2] *= b_final;
+        });
+    } else {
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] *= r_final;
+            pixel[1] *= g_final;
+            pixel[2] *= b_final;
+        }
     }
 
     [r_final, g_final, b_final]
@@ -144,17 +291,8 @@ pub fn auto_white_balance_no_clip(data: &mut [f32], channels: u8, strength: f32)
     }
 }
 
-/// Auto-levels mode for controlling color preservation
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum AutoLevelsMode {
-    /// Independent per-channel stretching (default, may shift colors)
-    #[default]
-    PerChannel,
-    /// Saturation-aware: reduces stretch for channels that would clip heavily
-    SaturationAware,
-    /// Preserve saturation: use minimum stretch across all channels
-    PreserveSaturation,
-}
+// Re-export AutoLevelsMode from models for backward compatibility
+pub use crate::models::AutoLevelsMode;
 
 /// Per-channel levels parameters for complete levels control
 #[derive(Debug, Clone, Copy)]
@@ -295,12 +433,79 @@ pub fn auto_levels_no_clip(data: &mut [f32], channels: u8, clip_percent: f32) ->
     [r_min, r_clip_max, g_min, g_clip_max, b_min, b_clip_max]
 }
 
+/// RGB histogram type for parallel accumulation
+type RgbHistograms = (Vec<u32>, Vec<u32>, Vec<u32>);
+
+/// Build RGB histograms in parallel using fold/reduce pattern
+fn build_rgb_histograms_parallel(data: &[f32], num_buckets: usize) -> RgbHistograms {
+    data.par_chunks_exact(3)
+        .fold(
+            || {
+                (
+                    vec![0u32; num_buckets],
+                    vec![0u32; num_buckets],
+                    vec![0u32; num_buckets],
+                )
+            },
+            |(mut r, mut g, mut b), pixel| {
+                let r_bucket = ((pixel[0].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize)
+                    .min(num_buckets - 1);
+                let g_bucket = ((pixel[1].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize)
+                    .min(num_buckets - 1);
+                let b_bucket = ((pixel[2].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize)
+                    .min(num_buckets - 1);
+                r[r_bucket] += 1;
+                g[g_bucket] += 1;
+                b[b_bucket] += 1;
+                (r, g, b)
+            },
+        )
+        .reduce(
+            || {
+                (
+                    vec![0u32; num_buckets],
+                    vec![0u32; num_buckets],
+                    vec![0u32; num_buckets],
+                )
+            },
+            |(mut r1, mut g1, mut b1), (r2, g2, b2)| {
+                for i in 0..num_buckets {
+                    r1[i] += r2[i];
+                    g1[i] += g2[i];
+                    b1[i] += b2[i];
+                }
+                (r1, g1, b1)
+            },
+        )
+}
+
+/// Build RGB histograms sequentially
+fn build_rgb_histograms_sequential(data: &[f32], num_buckets: usize) -> RgbHistograms {
+    let mut r_hist = vec![0u32; num_buckets];
+    let mut g_hist = vec![0u32; num_buckets];
+    let mut b_hist = vec![0u32; num_buckets];
+
+    for pixel in data.chunks_exact(3) {
+        let r_bucket =
+            ((pixel[0].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize).min(num_buckets - 1);
+        let g_bucket =
+            ((pixel[1].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize).min(num_buckets - 1);
+        let b_bucket =
+            ((pixel[2].clamp(0.0, 1.0) * (num_buckets - 1) as f32) as usize).min(num_buckets - 1);
+        r_hist[r_bucket] += 1;
+        g_hist[g_bucket] += 1;
+        b_hist[b_bucket] += 1;
+    }
+
+    (r_hist, g_hist, b_hist)
+}
+
 /// Auto-levels with configurable mode for color preservation
 ///
 /// Modes:
 /// - `PerChannel`: Independent stretching per channel (may shift colors)
 /// - `SaturationAware`: Reduces stretch for channels that would clip heavily
-/// - `PreserveSaturation`: Uses minimum stretch across all channels
+/// - `Unified`: Uses a shared min/max across all channels
 pub fn auto_levels_with_mode(
     data: &mut [f32],
     channels: u8,
@@ -311,26 +516,15 @@ pub fn auto_levels_with_mode(
         panic!("auto_levels only supports 3-channel RGB images");
     }
 
-    // Build per-channel histograms in a single pass through the data
-    const NUM_BUCKETS: usize = 65536;
-    let mut r_hist = vec![0u32; NUM_BUCKETS];
-    let mut g_hist = vec![0u32; NUM_BUCKETS];
-    let mut b_hist = vec![0u32; NUM_BUCKETS];
-
-    // Single pass to build all three histograms
-    for pixel in data.chunks_exact(3) {
-        let r_bucket =
-            ((pixel[0].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
-        let g_bucket =
-            ((pixel[1].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
-        let b_bucket =
-            ((pixel[2].clamp(0.0, 1.0) * (NUM_BUCKETS - 1) as f32) as usize).min(NUM_BUCKETS - 1);
-        r_hist[r_bucket] += 1;
-        g_hist[g_bucket] += 1;
-        b_hist[b_bucket] += 1;
-    }
-
     let num_pixels = data.len() / 3;
+    const NUM_BUCKETS: usize = 65536;
+
+    // Build per-channel histograms - parallel for large images
+    let (r_hist, g_hist, b_hist) = if num_pixels >= PARALLEL_THRESHOLD {
+        build_rgb_histograms_parallel(data, NUM_BUCKETS)
+    } else {
+        build_rgb_histograms_sequential(data, NUM_BUCKETS)
+    };
 
     // Compute initial min/max for each channel with clipping using histograms
     let (mut r_min, mut r_max) =
@@ -343,10 +537,11 @@ pub fn auto_levels_with_mode(
     // Apply mode-specific adjustments
     match mode {
         AutoLevelsMode::PerChannel => {
-            // No adjustment needed
+            // No adjustment needed - each channel stretched independently
         }
-        AutoLevelsMode::PreserveSaturation => {
-            // Use the minimum stretch (maximum range) across all channels
+        AutoLevelsMode::Unified => {
+            // Use the same stretch for all channels to preserve color relationships
+            // This prevents color shifts that can occur with per-channel stretching
             let min_of_mins = r_min.min(g_min).min(b_min);
             let max_of_maxs = r_max.max(g_max).max(b_max);
             r_min = min_of_mins;
@@ -385,11 +580,19 @@ pub fn auto_levels_with_mode(
         }
     }
 
-    // Apply stretch to each channel in-place
-    for pixel in data.chunks_exact_mut(3) {
-        pixel[0] = stretch_value(pixel[0], r_min, r_max);
-        pixel[1] = stretch_value(pixel[1], g_min, g_max);
-        pixel[2] = stretch_value(pixel[2], b_min, b_max);
+    // Apply stretch to each channel in-place - parallel for large images
+    if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            pixel[0] = stretch_value(pixel[0], r_min, r_max);
+            pixel[1] = stretch_value(pixel[1], g_min, g_max);
+            pixel[2] = stretch_value(pixel[2], b_min, b_max);
+        });
+    } else {
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] = stretch_value(pixel[0], r_min, r_max);
+            pixel[1] = stretch_value(pixel[1], g_min, g_max);
+            pixel[2] = stretch_value(pixel[2], b_min, b_max);
+        }
     }
 
     // Return the adjustment parameters for debugging
@@ -620,6 +823,8 @@ pub fn auto_color_no_clip(
         panic!("auto_color_no_clip only supports 3-channel RGB images");
     }
 
+    let num_pixels = data.len() / 3;
+
     // First pass: collect stats and find current max
     let mut low = AUTO_COLOR_INITIAL_LOW;
     let mut high = AUTO_COLOR_INITIAL_HIGH;
@@ -644,16 +849,22 @@ pub fn auto_color_no_clip(
         return [1.0, 1.0, 1.0];
     }
 
-    // Find current overall max
-    let mut overall_max = 0.0f32;
-    for pixel in data.chunks_exact(3) {
-        overall_max = overall_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
-    }
+    // Find current overall max - parallel for large images
+    let overall_max = if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact(3)
+            .map(|pixel| pixel[0].max(pixel[1]).max(pixel[2]))
+            .reduce(|| 0.0f32, |a, b| a.max(b))
+    } else {
+        let mut max = 0.0f32;
+        for pixel in data.chunks_exact(3) {
+            max = max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+        }
+        max
+    };
 
-    let sample_count = stats.count as f32;
-    let r_avg = stats.r_sum / sample_count;
-    let g_avg = stats.g_sum / sample_count;
-    let b_avg = stats.b_sum / sample_count;
+    let r_avg = stats.r_avg();
+    let g_avg = stats.g_avg();
+    let b_avg = stats.b_avg();
 
     let target_gray = (r_avg + g_avg + b_avg) / 3.0;
 
@@ -681,21 +892,56 @@ pub fn auto_color_no_clip(
     let g_gain = 1.0 - strength + strength * g_ideal;
     let b_gain = 1.0 - strength + strength * b_ideal;
 
-    // Apply color correction gains and find new max
-    let mut new_max = 0.0f32;
-    for pixel in data.chunks_exact_mut(3) {
-        pixel[0] *= r_gain;
-        pixel[1] *= g_gain;
-        pixel[2] *= b_gain;
-        new_max = new_max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
-    }
+    // Apply color correction gains and find new max - parallel for large images
+    let new_max = if num_pixels >= PARALLEL_THRESHOLD {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let atomic_max = AtomicU32::new(0);
+
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            pixel[0] *= r_gain;
+            pixel[1] *= g_gain;
+            pixel[2] *= b_gain;
+            let pixel_max = pixel[0].max(pixel[1]).max(pixel[2]);
+            // Atomic max update using compare-exchange loop
+            let mut current = atomic_max.load(Ordering::Relaxed);
+            loop {
+                let current_f32 = f32::from_bits(current);
+                if pixel_max <= current_f32 {
+                    break;
+                }
+                match atomic_max.compare_exchange_weak(
+                    current,
+                    pixel_max.to_bits(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(x) => current = x,
+                }
+            }
+        });
+        f32::from_bits(atomic_max.load(Ordering::Relaxed))
+    } else {
+        let mut max = 0.0f32;
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] *= r_gain;
+            pixel[1] *= g_gain;
+            pixel[2] *= b_gain;
+            max = max.max(pixel[0]).max(pixel[1]).max(pixel[2]);
+        }
+        max
+    };
 
     // Scale everything so the max equals the original overall_max
     // This preserves all data while giving proper color balance
     if new_max > overall_max && new_max > 0.0001 {
         let scale = overall_max / new_max;
-        for value in data.iter_mut() {
-            *value *= scale;
+        if num_pixels >= PARALLEL_THRESHOLD {
+            data.par_iter_mut().for_each(|value| *value *= scale);
+        } else {
+            for value in data.iter_mut() {
+                *value *= scale;
+            }
         }
         // Return the effective gains (original gain × scale)
         [r_gain * scale, g_gain * scale, b_gain * scale]
@@ -707,17 +953,49 @@ pub fn auto_color_no_clip(
 #[derive(Default, Clone, Copy)]
 struct ChannelStats {
     count: usize,
-    r_sum: f32,
-    g_sum: f32,
-    b_sum: f32,
+    r_sum: f64,
+    g_sum: f64,
+    b_sum: f64,
 }
 
 impl ChannelStats {
     fn add(&mut self, r: f32, g: f32, b: f32) {
         self.count += 1;
-        self.r_sum += r;
-        self.g_sum += g;
-        self.b_sum += b;
+        self.r_sum += r as f64;
+        self.g_sum += g as f64;
+        self.b_sum += b as f64;
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.count += other.count;
+        self.r_sum += other.r_sum;
+        self.g_sum += other.g_sum;
+        self.b_sum += other.b_sum;
+        self
+    }
+
+    fn r_avg(&self) -> f32 {
+        if self.count > 0 {
+            (self.r_sum / self.count as f64) as f32
+        } else {
+            0.0
+        }
+    }
+
+    fn g_avg(&self) -> f32 {
+        if self.count > 0 {
+            (self.g_sum / self.count as f64) as f32
+        } else {
+            0.0
+        }
+    }
+
+    fn b_avg(&self) -> f32 {
+        if self.count > 0 {
+            (self.b_sum / self.count as f64) as f32
+        } else {
+            0.0
+        }
     }
 }
 
@@ -734,6 +1012,7 @@ pub fn auto_color(
         panic!("auto_color only supports 3-channel RGB images");
     }
 
+    let num_pixels = data.len() / 3;
     let mut low = AUTO_COLOR_INITIAL_LOW;
     let mut high = AUTO_COLOR_INITIAL_HIGH;
     let mut stats = collect_channel_stats(data, low, high);
@@ -758,10 +1037,9 @@ pub fn auto_color(
         return [1.0, 1.0, 1.0];
     }
 
-    let sample_count = stats.count as f32;
-    let r_avg = stats.r_sum / sample_count;
-    let g_avg = stats.g_sum / sample_count;
-    let b_avg = stats.b_sum / sample_count;
+    let r_avg = stats.r_avg();
+    let g_avg = stats.g_avg();
+    let b_avg = stats.b_avg();
 
     // Calculate the target neutral gray value (average of all channels)
     let target_gray = (r_avg + g_avg + b_avg) / 3.0;
@@ -785,12 +1063,24 @@ pub fn auto_color(
         1.0
     };
 
-    // Apply adjustments with configurable strength
-    for pixel in data.chunks_exact_mut(3) {
-        // Blend between original and adjusted based on strength
-        pixel[0] = (pixel[0] * (1.0 - strength + strength * r_adjustment)).clamp(0.0, 1.0);
-        pixel[1] = (pixel[1] * (1.0 - strength + strength * g_adjustment)).clamp(0.0, 1.0);
-        pixel[2] = (pixel[2] * (1.0 - strength + strength * b_adjustment)).clamp(0.0, 1.0);
+    // Pre-compute final multipliers
+    let r_mult = 1.0 - strength + strength * r_adjustment;
+    let g_mult = 1.0 - strength + strength * g_adjustment;
+    let b_mult = 1.0 - strength + strength * b_adjustment;
+
+    // Apply adjustments - parallel for large images
+    if num_pixels >= PARALLEL_THRESHOLD {
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            pixel[0] = (pixel[0] * r_mult).clamp(0.0, 1.0);
+            pixel[1] = (pixel[1] * g_mult).clamp(0.0, 1.0);
+            pixel[2] = (pixel[2] * b_mult).clamp(0.0, 1.0);
+        });
+    } else {
+        for pixel in data.chunks_exact_mut(3) {
+            pixel[0] = (pixel[0] * r_mult).clamp(0.0, 1.0);
+            pixel[1] = (pixel[1] * g_mult).clamp(0.0, 1.0);
+            pixel[2] = (pixel[2] * b_mult).clamp(0.0, 1.0);
+        }
     }
 
     // Return adjustments for debugging
@@ -798,22 +1088,47 @@ pub fn auto_color(
 }
 
 fn collect_channel_stats(data: &[f32], low: f32, high: f32) -> ChannelStats {
-    if low <= 0.0 && high >= 1.0 {
-        let mut stats = ChannelStats::default();
-        for pixel in data.chunks_exact(3) {
-            stats.add(pixel[0], pixel[1], pixel[2]);
-        }
-        return stats;
-    }
+    let num_pixels = data.len() / 3;
 
-    let mut stats = ChannelStats::default();
-    for pixel in data.chunks_exact(3) {
-        let brightness = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
-        if brightness >= low && brightness <= high {
-            stats.add(pixel[0], pixel[1], pixel[2]);
+    if num_pixels >= PARALLEL_THRESHOLD {
+        // Parallel collection
+        if low <= 0.0 && high >= 1.0 {
+            data.par_chunks_exact(3)
+                .fold(ChannelStats::default, |mut stats, pixel| {
+                    stats.add(pixel[0], pixel[1], pixel[2]);
+                    stats
+                })
+                .reduce(ChannelStats::default, ChannelStats::merge)
+        } else {
+            data.par_chunks_exact(3)
+                .fold(ChannelStats::default, |mut stats, pixel| {
+                    let brightness = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
+                    if brightness >= low && brightness <= high {
+                        stats.add(pixel[0], pixel[1], pixel[2]);
+                    }
+                    stats
+                })
+                .reduce(ChannelStats::default, ChannelStats::merge)
+        }
+    } else {
+        // Sequential collection
+        if low <= 0.0 && high >= 1.0 {
+            let mut stats = ChannelStats::default();
+            for pixel in data.chunks_exact(3) {
+                stats.add(pixel[0], pixel[1], pixel[2]);
+            }
+            stats
+        } else {
+            let mut stats = ChannelStats::default();
+            for pixel in data.chunks_exact(3) {
+                let brightness = (pixel[0] + pixel[1] + pixel[2]) / 3.0;
+                if brightness >= low && brightness <= high {
+                    stats.add(pixel[0], pixel[1], pixel[2]);
+                }
+            }
+            stats
         }
     }
-    stats
 }
 
 /// Adaptive shadow lift based on percentile using histogram-based approach

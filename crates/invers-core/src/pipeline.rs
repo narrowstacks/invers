@@ -121,7 +121,14 @@ pub fn process_image(
                 options.auto_levels_clip_percent,
             )
         } else {
-            crate::auto_adjust::auto_levels(&mut data, channels, options.auto_levels_clip_percent)
+            // Use auto_levels_with_mode to support different stretching modes
+            // Unified mode uses same stretch for all channels to preserve color relationships
+            crate::auto_adjust::auto_levels_with_mode(
+                &mut data,
+                channels,
+                options.auto_levels_clip_percent,
+                options.auto_levels_mode,
+            )
         };
 
         if options.debug {
@@ -437,6 +444,7 @@ pub fn estimate_base(
     match method {
         BaseEstimationMethod::Border => estimate_base_from_border(image, border_pct),
         BaseEstimationMethod::Regions => estimate_base_from_regions(image),
+        BaseEstimationMethod::Histogram => estimate_base_from_histogram(image),
     }
 }
 
@@ -1059,7 +1067,7 @@ fn estimate_base_from_histogram(image: &DecodedImage) -> Result<BaseEstimation, 
         let max_ch = r.max(g).max(b);
         let min_ch = r.min(g).min(b);
 
-        if max_ch >= MIN_BRIGHT && min_ch <= MAX_BRIGHT {
+        if max_ch >= MIN_BRIGHT && max_ch <= MAX_BRIGHT {
             // Bin each channel
             let r_bin = ((r * (NUM_BINS - 1) as f32) as usize).min(NUM_BINS - 1);
             let g_bin = ((g * (NUM_BINS - 1) as f32) as usize).min(NUM_BINS - 1);
@@ -1156,10 +1164,10 @@ fn compute_channel_medians_from_brightest(pixels: &[[f32; 3]], num_pixels: usize
                 return false;
             }
             // Check G/B ratio is in typical orange mask range
-            // Tighter range (1.35-2.2) to exclude pixels with elevated blue
-            // from scanner artifacts or edge effects
+            // Wider range (1.15-2.5) to include more valid film bases
+            // while still excluding obvious non-film pixels
             let gb_ratio = g / b;
-            (1.35..=2.2).contains(&gb_ratio)
+            (1.15..=2.5).contains(&gb_ratio)
         })
         .copied()
         .collect();
@@ -1852,6 +1860,8 @@ pub fn apply_color_matrix(data: &mut [f32], matrix: &[[f32; 3]; 3], channels: u8
 }
 
 /// Apply color matrix to a single pixel
+///
+/// Uses simple clamping to working range to preserve highlight detail
 #[inline(always)]
 fn apply_color_matrix_to_pixel(pixel: &mut [f32], matrix: &[[f32; 3]; 3]) {
     let r = pixel[0];
@@ -1859,6 +1869,7 @@ fn apply_color_matrix_to_pixel(pixel: &mut [f32], matrix: &[[f32; 3]; 3]) {
     let b = pixel[2];
 
     // Matrix multiplication: output = matrix * input
+    // Clamp to working range (no soft-clip to preserve highlight detail)
     pixel[0] = clamp_to_working_range(matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b);
     pixel[1] = clamp_to_working_range(matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b);
     pixel[2] = clamp_to_working_range(matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b);

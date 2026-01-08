@@ -63,7 +63,7 @@ fn default_toe_strength() -> f32 {
 }
 
 fn default_shoulder_strength() -> f32 {
-    0.3
+    0.0 // Preserve highlights - no shoulder compression by default
 }
 
 fn default_toe_length() -> f32 {
@@ -408,6 +408,14 @@ pub struct ConvertOptions {
     #[serde(default)]
     pub base_sampling_mode: BaseSamplingMode,
 
+    /// Base estimation method (regions, border, or histogram)
+    #[serde(default)]
+    pub base_estimation_method: BaseEstimationMethod,
+
+    /// Auto-levels histogram stretching mode
+    #[serde(default)]
+    pub auto_levels_mode: AutoLevelsMode,
+
     /// Inversion mode (linear or logarithmic)
     #[serde(default)]
     pub inversion_mode: InversionMode,
@@ -564,11 +572,31 @@ pub enum BaseSamplingMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BaseEstimationMethod {
     /// Sample discrete border regions (top, bottom, left, right) individually
+    /// Evaluates 5 candidate regions and picks the best one based on brightness
     #[default]
     Regions,
 
     /// Sample outer N% of entire image as continuous border frame
     Border,
+
+    /// Use brightness histogram peak to estimate base color
+    /// Finds the mode in the upper brightness range (0.30-0.90)
+    Histogram,
+}
+
+/// Auto-levels histogram stretching mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AutoLevelsMode {
+    /// Stretch each channel independently (can shift colors)
+    #[default]
+    PerChannel,
+
+    /// Use same stretch factor for all channels (preserves color relationships)
+    /// Also known as PreserveSaturation mode
+    Unified,
+
+    /// Saturation-aware: reduces stretch for channels that would clip heavily
+    SaturationAware,
 }
 
 /// Inversion mode for negative-to-positive conversion

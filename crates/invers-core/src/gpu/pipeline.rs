@@ -1053,6 +1053,10 @@ fn compute_wb_gains_cpu(image: &GpuImage, _ctx: &GpuContext) -> Result<[f32; 3],
 }
 
 /// Compute exposure gain (requires downloading image data for median)
+///
+/// Uses a highlight-aware algorithm that:
+/// 1. Computes the gain needed to reach target median
+/// 2. Limits the gain to preserve highlights (98th percentile stays below 0.95)
 fn compute_exposure_gain_cpu(
     image: &GpuImage,
     _ctx: &GpuContext,
@@ -1070,19 +1074,41 @@ fn compute_exposure_gain_cpu(
         return Ok(1.0);
     }
 
-    // Find median
-    let mid = luminances.len() / 2;
+    let n = luminances.len();
+
+    // Find median (50th percentile)
+    let mid = n / 2;
     let median = *luminances
         .select_nth_unstable_by(mid, |a, b| {
             a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
         })
         .1;
 
-    // Compute gain to reach target
-    let target = options.auto_exposure_target_median;
-    let gain = target / median.max(0.001);
+    // Find 98th percentile for highlight preservation
+    let p98_idx = (n * 98) / 100;
+    let p98 = *luminances
+        .select_nth_unstable_by(p98_idx, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .1;
 
-    // Clamp gain
+    // Compute gain to reach target median
+    let target = options.auto_exposure_target_median;
+    let median_gain = target / median.max(0.001);
+
+    // Compute maximum gain that keeps 98th percentile below 0.95
+    // This prevents highlight clipping
+    const HIGHLIGHT_CEILING: f32 = 0.95;
+    let highlight_limit_gain = if p98 > 0.001 {
+        HIGHLIGHT_CEILING / p98
+    } else {
+        options.auto_exposure_max_gain
+    };
+
+    // Use the minimum of median-based gain and highlight-preserving gain
+    let gain = median_gain.min(highlight_limit_gain);
+
+    // Clamp gain to configured limits
     Ok(gain.clamp(
         options.auto_exposure_min_gain,
         options.auto_exposure_max_gain,

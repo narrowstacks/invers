@@ -335,6 +335,8 @@ pub fn build_convert_options_full_with_gpu(
         auto_color_max_gain: defaults.auto_color_max_gain,
         base_brightest_percent: defaults.base_brightest_percent,
         base_sampling_mode: defaults.base_sampling_mode,
+        base_estimation_method: invers_core::models::BaseEstimationMethod::default(),
+        auto_levels_mode: invers_core::models::AutoLevelsMode::default(),
         inversion_mode,
         shadow_lift_mode: defaults.shadow_lift_mode,
         shadow_lift_value: defaults.shadow_lift_value,

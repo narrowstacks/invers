@@ -15,6 +15,9 @@ struct UtilityParams {
 const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
 const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
 
+// Default soft-clip knee size (5%)
+const SOFT_CLIP_KNEE: f32 = 0.05;
+
 // Workgroup size for all shaders
 const WORKGROUP_SIZE: u32 = 256u;
 
@@ -24,7 +27,34 @@ fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
     return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
 }
 
-// Clamp values to working range
+// Soft-clip a value to [0, 1] range with smooth knee
+// Unlike hard clamping which loses all information above 1.0,
+// soft-clipping applies a smooth compression curve that preserves
+// relative differences while preventing overflow.
+fn soft_clip_highlight(value: f32, knee: f32) -> f32 {
+    if (value <= 0.0) {
+        return WORKING_RANGE_FLOOR;
+    } else if (value <= 1.0 - knee) {
+        // Below knee: pass through unchanged
+        return value;
+    } else if (value >= 1.0 + knee) {
+        // Far above 1.0: asymptote just below ceiling
+        return WORKING_RANGE_CEILING;
+    } else {
+        // In knee region: smooth exponential compression
+        let knee_start = 1.0 - knee;
+        let normalized = (value - knee_start) / (2.0 * knee);
+        let compressed = 1.0 - exp(-normalized * 2.0);
+        return knee_start + knee * compressed;
+    }
+}
+
+// Soft-clip with default 5% knee
+fn soft_clip(value: f32) -> f32 {
+    return soft_clip_highlight(value, SOFT_CLIP_KNEE);
+}
+
+// Clamp values to working range (hard clamp)
 // param1, param2, param3: unused
 @compute @workgroup_size(256)
 fn clamp_range(
@@ -41,6 +71,27 @@ fn clamp_range(
     pixels[idx] = clamp(pixels[idx], WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
     pixels[idx + 1u] = clamp(pixels[idx + 1u], WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
     pixels[idx + 2u] = clamp(pixels[idx + 2u], WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
+}
+
+// Soft-clip values to working range (preserves highlight detail)
+// param1: knee size (default 0.05 = 5%)
+// param2, param3: unused
+@compute @workgroup_size(256)
+fn soft_clip_range(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>
+) {
+    let pixel_idx = get_pixel_index(id, num_workgroups);
+    if (pixel_idx >= params.pixel_count) {
+        return;
+    }
+
+    let idx = pixel_idx * 3u;
+    let knee = select(SOFT_CLIP_KNEE, params.param1, params.param1 > 0.0);
+
+    pixels[idx] = soft_clip_highlight(pixels[idx], knee);
+    pixels[idx + 1u] = soft_clip_highlight(pixels[idx + 1u], knee);
+    pixels[idx + 2u] = soft_clip_highlight(pixels[idx + 2u], knee);
 }
 
 // Apply exposure multiplier

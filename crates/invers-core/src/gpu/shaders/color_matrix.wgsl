@@ -1,5 +1,12 @@
 // Color matrix multiplication and gain application shaders.
 
+// Working range constants
+const WORKING_RANGE_FLOOR: f32 = 1.0 / 65535.0;
+const WORKING_RANGE_CEILING: f32 = 1.0 - WORKING_RANGE_FLOOR;
+
+// Soft-clip knee size (5% - matches CPU implementation)
+const SOFT_CLIP_KNEE: f32 = 0.05;
+
 struct ColorMatrixParams {
     // Row-major 3x3 matrix with padding for 16-byte alignment
     m00: f32, m01: f32, m02: f32, _pad0: f32,
@@ -32,6 +39,25 @@ fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
     return id.y * num_workgroups.x * WORKGROUP_SIZE + id.x;
 }
 
+// Soft-clip a value to [0, 1] range with smooth knee
+// Unlike hard clamping which loses all information above 1.0,
+// soft-clipping applies a smooth compression curve that preserves
+// relative differences while preventing overflow.
+fn soft_clip_highlight(value: f32, knee: f32) -> f32 {
+    if (value <= 0.0) {
+        return WORKING_RANGE_FLOOR;
+    } else if (value <= 1.0 - knee) {
+        return value;
+    } else if (value >= 1.0 + knee) {
+        return WORKING_RANGE_CEILING;
+    } else {
+        let knee_start = 1.0 - knee;
+        let normalized = (value - knee_start) / (2.0 * knee);
+        let compressed = 1.0 - exp(-normalized * 2.0);
+        return knee_start + knee * compressed;
+    }
+}
+
 // Apply 3x3 color matrix to RGB pixels
 // output = matrix × input
 @compute @workgroup_size(256)
@@ -54,13 +80,10 @@ fn apply_color_matrix(
     let new_g = matrix_params.m10 * r + matrix_params.m11 * g + matrix_params.m12 * b;
     let new_b = matrix_params.m20 * r + matrix_params.m21 * g + matrix_params.m22 * b;
 
-    // Clamp to working range
-    let floor = 1.0 / 65535.0;
-    let ceiling = 1.0 - floor;
-
-    pixels[idx] = clamp(new_r, floor, ceiling);
-    pixels[idx + 1u] = clamp(new_g, floor, ceiling);
-    pixels[idx + 2u] = clamp(new_b, floor, ceiling);
+    // Clamp to working range (no soft-clip to preserve highlight detail)
+    pixels[idx] = clamp(new_r, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
+    pixels[idx + 1u] = clamp(new_g, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
+    pixels[idx + 2u] = clamp(new_b, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
 }
 
 // Separate binding for gain params (used in different entry point)

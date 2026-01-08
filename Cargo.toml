@@ -13,3 +13,15 @@ license = "MIT"
 repository = "https://github.com/narrowstacks/invers"
 homepage = "https://github.com/narrowstacks/invers"
 description = "A professional-grade film negative to positive conversion tool"
+
+# Optimized release profile for maximum performance
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# Benchmark profile inherits release optimizations with debug symbols
+[profile.bench]
+inherits = "release"
+debug = true

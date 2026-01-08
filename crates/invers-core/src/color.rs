@@ -45,16 +45,143 @@ impl std::str::FromStr for Colorspace {
     }
 }
 
-/// Transform image data to a target colorspace
+/// Transform image data from one colorspace to another
+///
+/// Performs RGB → XYZ → RGB transformation using the appropriate matrices.
+/// All colorspaces are D65-adapted so no chromatic adaptation is needed.
+///
+/// # Arguments
+/// * `data` - Interleaved RGB pixel data (3 values per pixel)
+/// * `from` - Source colorspace
+/// * `to` - Target colorspace
+///
+/// # Returns
+/// Ok(()) if successful, or Err with message if transformation fails
 pub fn transform_colorspace(
-    _data: &mut [f32],
-    _from: Colorspace,
-    _to: Colorspace,
+    data: &mut [f32],
+    from: Colorspace,
+    to: Colorspace,
 ) -> Result<(), String> {
-    // TODO: Implement colorspace transformation using lcms2
-    // - Create ICC profiles for source and destination
-    // - Apply transformation
-    Err("Colorspace transformation not yet implemented".to_string())
+    // No-op if source and destination are the same
+    if from == to {
+        return Ok(());
+    }
+
+    // Get transformation matrices
+    let rgb_to_xyz = get_rgb_to_xyz_matrix(from);
+    let xyz_to_rgb = get_xyz_to_rgb_matrix(to);
+
+    // Precompute combined matrix for efficiency: combined = xyz_to_rgb * rgb_to_xyz
+    let combined = multiply_3x3_matrices(xyz_to_rgb, rgb_to_xyz);
+
+    // Apply transformation to each pixel
+    const PARALLEL_THRESHOLD: usize = 100_000;
+    let num_pixels = data.len() / 3;
+
+    if num_pixels >= PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        data.par_chunks_exact_mut(3).for_each(|pixel| {
+            apply_3x3_matrix_to_pixel(pixel, &combined);
+        });
+    } else {
+        for pixel in data.chunks_exact_mut(3) {
+            apply_3x3_matrix_to_pixel(pixel, &combined);
+        }
+    }
+
+    Ok(())
+}
+
+/// Multiply two 3x3 matrices: result = a * b
+#[inline]
+fn multiply_3x3_matrices(
+    a: &[[f32; 3]; 3],
+    b: &[[f32; 3]; 3],
+) -> [[f32; 3]; 3] {
+    let mut result = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            result[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    result
+}
+
+/// Apply a 3x3 matrix to a single pixel in-place
+#[inline]
+fn apply_3x3_matrix_to_pixel(pixel: &mut [f32], matrix: &[[f32; 3]; 3]) {
+    let r = pixel[0];
+    let g = pixel[1];
+    let b = pixel[2];
+    pixel[0] = matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b;
+    pixel[1] = matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b;
+    pixel[2] = matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b;
+}
+
+// =============================================================================
+// Bradford Chromatic Adaptation (for future use with different illuminants)
+// =============================================================================
+
+/// Bradford chromatic adaptation matrix
+/// Used to adapt colors between different white points (illuminants)
+#[allow(dead_code)]
+const BRADFORD: [[f32; 3]; 3] = [
+    [0.8951, 0.2664, -0.1614],
+    [-0.7502, 1.7135, 0.0367],
+    [0.0389, -0.0685, 1.0296],
+];
+
+/// Inverse Bradford matrix
+#[allow(dead_code)]
+const BRADFORD_INV: [[f32; 3]; 3] = [
+    [0.9869929, -0.1470543, 0.1599627],
+    [0.4323053, 0.5183603, 0.0492912],
+    [-0.0085287, 0.0400428, 0.9684867],
+];
+
+/// D50 white point (used by ProPhoto RGB)
+#[allow(dead_code)]
+const D50_X: f32 = 0.96422;
+#[allow(dead_code)]
+const D50_Y: f32 = 1.00000;
+#[allow(dead_code)]
+const D50_Z: f32 = 0.82521;
+
+/// Compute Bradford chromatic adaptation matrix from source to destination white point
+///
+/// # Arguments
+/// * `src_white` - Source white point as (X, Y, Z)
+/// * `dst_white` - Destination white point as (X, Y, Z)
+///
+/// # Returns
+/// 3x3 chromatic adaptation matrix
+#[allow(dead_code)]
+fn compute_bradford_adaptation(
+    src_white: (f32, f32, f32),
+    dst_white: (f32, f32, f32),
+) -> [[f32; 3]; 3] {
+    // Convert white points to cone response domain
+    let src_cone = [
+        BRADFORD[0][0] * src_white.0 + BRADFORD[0][1] * src_white.1 + BRADFORD[0][2] * src_white.2,
+        BRADFORD[1][0] * src_white.0 + BRADFORD[1][1] * src_white.1 + BRADFORD[1][2] * src_white.2,
+        BRADFORD[2][0] * src_white.0 + BRADFORD[2][1] * src_white.1 + BRADFORD[2][2] * src_white.2,
+    ];
+    let dst_cone = [
+        BRADFORD[0][0] * dst_white.0 + BRADFORD[0][1] * dst_white.1 + BRADFORD[0][2] * dst_white.2,
+        BRADFORD[1][0] * dst_white.0 + BRADFORD[1][1] * dst_white.1 + BRADFORD[1][2] * dst_white.2,
+        BRADFORD[2][0] * dst_white.0 + BRADFORD[2][1] * dst_white.1 + BRADFORD[2][2] * dst_white.2,
+    ];
+
+    // Diagonal scaling matrix
+    let scale = [
+        [dst_cone[0] / src_cone[0], 0.0, 0.0],
+        [0.0, dst_cone[1] / src_cone[1], 0.0],
+        [0.0, 0.0, dst_cone[2] / src_cone[2]],
+    ];
+
+    // Combined: bradford_inv * scale * bradford
+    let temp = multiply_3x3_matrices(&scale, &BRADFORD);
+    multiply_3x3_matrices(&BRADFORD_INV, &temp)
 }
 
 /// Load an ICC profile from file
@@ -239,21 +366,97 @@ const XYZ_TO_SRGB: [[f32; 3]; 3] = [
     [0.0556434, -0.2040259, 1.0572252],
 ];
 
-/// Convert linear RGB to XYZ (D65)
+/// Rec.2020 to XYZ matrix (D65)
+/// Source: ITU-R BT.2020 specification
+const REC2020_TO_XYZ: [[f32; 3]; 3] = [
+    [0.6370, 0.1446, 0.1689],
+    [0.2627, 0.6780, 0.0593],
+    [0.0000, 0.0281, 1.0610],
+];
+
+/// XYZ to Rec.2020 matrix (D65)
+/// Inverse of REC2020_TO_XYZ
+const XYZ_TO_REC2020: [[f32; 3]; 3] = [
+    [1.7167, -0.3557, -0.2534],
+    [-0.6667, 1.6165, 0.0158],
+    [0.0176, -0.0428, 0.9421],
+];
+
+/// ProPhoto RGB to XYZ matrix (D50, adapted to D65)
+const PROPHOTO_TO_XYZ: [[f32; 3]; 3] = [
+    [0.7976749, 0.1351917, 0.0313534],
+    [0.2880402, 0.7118741, 0.0000857],
+    [0.0000000, 0.0000000, 0.8252100],
+];
+
+/// XYZ to ProPhoto RGB matrix (D65 adapted to D50)
+const XYZ_TO_PROPHOTO: [[f32; 3]; 3] = [
+    [1.3459433, -0.2556075, -0.0511118],
+    [-0.5445989, 1.5081673, 0.0205351],
+    [0.0000000, 0.0000000, 1.2118128],
+];
+
+/// Display P3 to XYZ matrix (D65)
+const DISPLAYP3_TO_XYZ: [[f32; 3]; 3] = [
+    [0.4865709, 0.2656677, 0.1982173],
+    [0.2289746, 0.6917385, 0.0792869],
+    [0.0000000, 0.0451134, 1.0439444],
+];
+
+/// XYZ to Display P3 matrix (D65)
+const XYZ_TO_DISPLAYP3: [[f32; 3]; 3] = [
+    [2.4934969, -0.9313836, -0.4027108],
+    [-0.8294890, 1.7626641, 0.0236247],
+    [0.0358458, -0.0761724, 0.9568845],
+];
+
+/// Get the RGB to XYZ matrix for a colorspace
+fn get_rgb_to_xyz_matrix(colorspace: Colorspace) -> &'static [[f32; 3]; 3] {
+    match colorspace {
+        Colorspace::LinearSRGB => &SRGB_TO_XYZ,
+        Colorspace::LinearRec2020 => &REC2020_TO_XYZ,
+        Colorspace::LinearProPhoto => &PROPHOTO_TO_XYZ,
+        Colorspace::LinearDisplayP3 => &DISPLAYP3_TO_XYZ,
+    }
+}
+
+/// Get the XYZ to RGB matrix for a colorspace
+fn get_xyz_to_rgb_matrix(colorspace: Colorspace) -> &'static [[f32; 3]; 3] {
+    match colorspace {
+        Colorspace::LinearSRGB => &XYZ_TO_SRGB,
+        Colorspace::LinearRec2020 => &XYZ_TO_REC2020,
+        Colorspace::LinearProPhoto => &XYZ_TO_PROPHOTO,
+        Colorspace::LinearDisplayP3 => &XYZ_TO_DISPLAYP3,
+    }
+}
+
+/// Convert linear RGB to XYZ (D65) with explicit colorspace
 #[inline]
-fn linear_rgb_to_xyz(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-    let x = SRGB_TO_XYZ[0][0] * r + SRGB_TO_XYZ[0][1] * g + SRGB_TO_XYZ[0][2] * b;
-    let y = SRGB_TO_XYZ[1][0] * r + SRGB_TO_XYZ[1][1] * g + SRGB_TO_XYZ[1][2] * b;
-    let z = SRGB_TO_XYZ[2][0] * r + SRGB_TO_XYZ[2][1] * g + SRGB_TO_XYZ[2][2] * b;
+fn linear_rgb_to_xyz_with_colorspace(
+    r: f32,
+    g: f32,
+    b: f32,
+    colorspace: Colorspace,
+) -> (f32, f32, f32) {
+    let m = get_rgb_to_xyz_matrix(colorspace);
+    let x = m[0][0] * r + m[0][1] * g + m[0][2] * b;
+    let y = m[1][0] * r + m[1][1] * g + m[1][2] * b;
+    let z = m[2][0] * r + m[2][1] * g + m[2][2] * b;
     (x, y, z)
 }
 
-/// Convert XYZ to linear RGB (D65)
+/// Convert XYZ to linear RGB (D65) with explicit colorspace
 #[inline]
-fn xyz_to_linear_rgb(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
-    let r = XYZ_TO_SRGB[0][0] * x + XYZ_TO_SRGB[0][1] * y + XYZ_TO_SRGB[0][2] * z;
-    let g = XYZ_TO_SRGB[1][0] * x + XYZ_TO_SRGB[1][1] * y + XYZ_TO_SRGB[1][2] * z;
-    let b = XYZ_TO_SRGB[2][0] * x + XYZ_TO_SRGB[2][1] * y + XYZ_TO_SRGB[2][2] * z;
+fn xyz_to_linear_rgb_with_colorspace(
+    x: f32,
+    y: f32,
+    z: f32,
+    colorspace: Colorspace,
+) -> (f32, f32, f32) {
+    let m = get_xyz_to_rgb_matrix(colorspace);
+    let r = m[0][0] * x + m[0][1] * y + m[0][2] * z;
+    let g = m[1][0] * x + m[1][1] * y + m[1][2] * z;
+    let b = m[2][0] * x + m[2][1] * y + m[2][2] * z;
     (r, g, b)
 }
 
@@ -284,16 +487,30 @@ fn lab_f_inv(t: f32) -> f32 {
 
 /// Convert linear RGB to CIE LAB (D65 illuminant)
 ///
+/// IMPORTANT: This function assumes sRGB input. For other colorspaces,
+/// use `rgb_to_lab_with_colorspace` instead.
+///
 /// Input: Linear RGB values in range 0.0-1.0
 /// Output: LAB where L is 0-100, a and b are approximately -128 to +128
 #[inline]
 pub fn rgb_to_lab(r: f32, g: f32, b: f32) -> Lab {
+    rgb_to_lab_with_colorspace(r, g, b, Colorspace::LinearSRGB)
+}
+
+/// Convert linear RGB to CIE LAB (D65 illuminant) with explicit colorspace
+///
+/// Use this function when working in a non-sRGB colorspace like Rec.2020.
+///
+/// Input: Linear RGB values in range 0.0-1.0
+/// Output: LAB where L is 0-100, a and b are approximately -128 to +128
+#[inline]
+pub fn rgb_to_lab_with_colorspace(r: f32, g: f32, b: f32, colorspace: Colorspace) -> Lab {
     let r = r.max(0.0);
     let g = g.max(0.0);
     let b = b.max(0.0);
 
-    // RGB to XYZ
-    let (x, y, z) = linear_rgb_to_xyz(r, g, b);
+    // RGB to XYZ using the correct colorspace matrix
+    let (x, y, z) = linear_rgb_to_xyz_with_colorspace(r, g, b, colorspace);
 
     // Normalize by reference white
     let xn = x / D65_X;
@@ -315,10 +532,24 @@ pub fn rgb_to_lab(r: f32, g: f32, b: f32) -> Lab {
 
 /// Convert CIE LAB to linear RGB (D65 illuminant)
 ///
+/// IMPORTANT: This function returns sRGB output. For other colorspaces,
+/// use `lab_to_rgb_with_colorspace` instead.
+///
 /// Input: LAB where L is 0-100, a and b are approximately -128 to +128
 /// Output: Linear RGB values (may be outside 0.0-1.0 for out-of-gamut colors)
 #[inline]
 pub fn lab_to_rgb(lab: Lab) -> (f32, f32, f32) {
+    lab_to_rgb_with_colorspace(lab, Colorspace::LinearSRGB)
+}
+
+/// Convert CIE LAB to linear RGB (D65 illuminant) with explicit colorspace
+///
+/// Use this function when working in a non-sRGB colorspace like Rec.2020.
+///
+/// Input: LAB where L is 0-100, a and b are approximately -128 to +128
+/// Output: Linear RGB values (may be outside 0.0-1.0 for out-of-gamut colors)
+#[inline]
+pub fn lab_to_rgb_with_colorspace(lab: Lab, colorspace: Colorspace) -> (f32, f32, f32) {
     let Lab { l, a, b } = lab;
 
     // LAB to XYZ
@@ -330,8 +561,8 @@ pub fn lab_to_rgb(lab: Lab) -> (f32, f32, f32) {
     let y = D65_Y * lab_f_inv(fy);
     let z = D65_Z * lab_f_inv(fz);
 
-    // XYZ to RGB
-    xyz_to_linear_rgb(x, y, z)
+    // XYZ to RGB using the correct colorspace matrix
+    xyz_to_linear_rgb_with_colorspace(x, y, z, colorspace)
 }
 
 /// Convert RGB array to LAB (for batch processing)

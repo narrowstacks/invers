@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use invers_cli::{
-    build_convert_options, build_convert_options_full_with_gpu, determine_output_path,
-    parse_base_rgb, parse_inversion_mode, parse_roi,
+    build_convert_options_full_with_gpu, determine_output_path, parse_base_rgb, parse_roi,
 };
+#[cfg(debug_assertions)]
+use invers_cli::{build_convert_options, parse_inversion_mode};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -13,8 +14,12 @@ use std::time::Instant;
 #[command(name = "invers")]
 #[command(version, about = "Film negative to positive converter", long_about = None)]
 struct Cli {
+    /// Show the path to the config file being used (if any) and exit
+    #[arg(long)]
+    config_path: bool,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -41,21 +46,9 @@ enum Commands {
         #[arg(long, value_name = "FORMAT", default_value = "tiff16")]
         export: String,
 
-        /// Skip tone curve application
-        #[arg(long)]
-        no_tonecurve: bool,
-
-        /// Skip color matrix correction
-        #[arg(long)]
-        no_colormatrix: bool,
-
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
         #[arg(long, value_name = "FLOAT", default_value = "1.0")]
         exposure: f32,
-
-        /// Inversion mode: "mask-aware" (default), "linear", "log", or "divide-blend"
-        #[arg(long, value_name = "MODE")]
-        inversion: Option<String>,
 
         /// Manual base RGB values (comma-separated: R,G,B)
         /// Use 'invers analyze' to determine these values, then reuse across a roll
@@ -70,19 +63,38 @@ enum Commands {
         #[arg(long)]
         cpu: bool,
 
-        /// Enable automatic white balance correction
-        #[arg(long)]
-        auto_wb: bool,
-
-        /// Strength of auto white balance correction (0.0-1.0, default 1.0)
-        #[arg(long, value_name = "FLOAT", default_value = "1.0")]
-        auto_wb_strength: f32,
-
         /// Enable verbose output (config loading, processing details)
         #[arg(short, long)]
         verbose: bool,
 
-        /// Enable debug output (detailed pipeline parameters)
+        // === Debug-only options (only available in debug builds) ===
+        /// [DEBUG] Skip tone curve application
+        #[cfg(debug_assertions)]
+        #[arg(long)]
+        no_tonecurve: bool,
+
+        /// [DEBUG] Skip color matrix correction
+        #[cfg(debug_assertions)]
+        #[arg(long)]
+        no_colormatrix: bool,
+
+        /// [DEBUG] Inversion mode override: "mask-aware", "linear", "log", "divide-blend", or "bw"
+        #[cfg(debug_assertions)]
+        #[arg(long, value_name = "MODE")]
+        inversion: Option<String>,
+
+        /// [DEBUG] Enable automatic white balance correction
+        #[cfg(debug_assertions)]
+        #[arg(long)]
+        auto_wb: bool,
+
+        /// [DEBUG] Strength of auto white balance correction (0.0-1.0)
+        #[cfg(debug_assertions)]
+        #[arg(long, value_name = "FLOAT", default_value = "1.0")]
+        auto_wb_strength: f32,
+
+        /// [DEBUG] Enable debug output (detailed pipeline parameters)
+        #[cfg(debug_assertions)]
         #[arg(long)]
         debug: bool,
     },
@@ -176,7 +188,9 @@ enum Commands {
         force: bool,
     },
 
-    /// Diagnose and compare our conversion with third-party software
+    // === Debug-only commands (only available in debug builds) ===
+    /// [DEBUG] Diagnose and compare our conversion with third-party software
+    #[cfg(debug_assertions)]
     Diagnose {
         /// Original negative image
         #[arg(value_name = "ORIGINAL")]
@@ -215,7 +229,8 @@ enum Commands {
         debug: bool,
     },
 
-    /// Test and optimize parameters against reference conversion
+    /// [DEBUG] Test and optimize parameters against reference conversion
+    #[cfg(debug_assertions)]
     TestParams {
         /// Original negative image
         #[arg(value_name = "ORIGINAL")]
@@ -300,42 +315,84 @@ enum PresetAction {
 fn main() {
     let cli = Cli::parse();
 
-    let result = match cli.command {
+    // Handle --config-path flag
+    if cli.config_path {
+        let handle = invers_core::config::pipeline_config_handle();
+        match &handle.source {
+            Some(path) => println!("{}", path.display()),
+            None => println!("No config file found (using built-in defaults)"),
+        }
+        return;
+    }
+
+    // Require a subcommand if --config-path wasn't used
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            eprintln!("Error: A subcommand is required. Use --help for usage.");
+            std::process::exit(1);
+        }
+    };
+
+    let result = match command {
         Commands::Convert {
             input,
             out,
             preset,
             scan_profile,
             export,
-            no_tonecurve,
-            no_colormatrix,
             exposure,
-            inversion,
             base,
             silent,
             cpu,
-            auto_wb,
-            auto_wb_strength,
             verbose,
-            debug,
-        } => cmd_convert(
-            input,
-            out,
-            preset,
-            scan_profile,
-            export,
+            // Debug-only fields
+            #[cfg(debug_assertions)]
             no_tonecurve,
+            #[cfg(debug_assertions)]
             no_colormatrix,
-            exposure,
+            #[cfg(debug_assertions)]
             inversion,
-            base,
-            silent,
-            cpu,
+            #[cfg(debug_assertions)]
             auto_wb,
+            #[cfg(debug_assertions)]
             auto_wb_strength,
-            verbose,
+            #[cfg(debug_assertions)]
             debug,
-        ),
+        } => {
+            // In release builds, use default values for debug-only options
+            #[cfg(not(debug_assertions))]
+            let no_tonecurve = false;
+            #[cfg(not(debug_assertions))]
+            let no_colormatrix = false;
+            #[cfg(not(debug_assertions))]
+            let inversion: Option<String> = None;
+            #[cfg(not(debug_assertions))]
+            let auto_wb = true; // Enabled by default in release
+            #[cfg(not(debug_assertions))]
+            let auto_wb_strength = 1.0f32;
+            #[cfg(not(debug_assertions))]
+            let debug = false;
+
+            cmd_convert(
+                input,
+                out,
+                preset,
+                scan_profile,
+                export,
+                no_tonecurve,
+                no_colormatrix,
+                exposure,
+                inversion,
+                base,
+                silent,
+                cpu,
+                auto_wb,
+                auto_wb_strength,
+                verbose,
+                debug,
+            )
+        }
 
         Commands::Analyze {
             input,
@@ -369,6 +426,7 @@ fn main() {
 
         Commands::Init { force } => cmd_init(force),
 
+        #[cfg(debug_assertions)]
         Commands::Diagnose {
             original,
             third_party,
@@ -391,6 +449,7 @@ fn main() {
             debug,
         ),
 
+        #[cfg(debug_assertions)]
         Commands::TestParams {
             original,
             reference,
@@ -429,6 +488,7 @@ fn main() {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(unused_variables)] // Some params only used in debug builds
 fn cmd_convert(
     input: PathBuf,
     out: Option<PathBuf>,
@@ -453,6 +513,26 @@ fn cmd_convert(
     if verbose || debug {
         invers_core::config::set_verbose(true);
         invers_core::config::log_config_usage();
+
+        // Display loaded config settings
+        let handle = invers_core::config::pipeline_config_handle();
+        let defaults = &handle.config.defaults;
+        println!("Pipeline config:");
+        println!("  inversion_mode: {:?}", defaults.inversion_mode);
+        println!("  enable_auto_levels: {}", defaults.enable_auto_levels);
+        println!("  preserve_headroom: {}", defaults.preserve_headroom);
+        println!("  exposure_compensation: {}", defaults.exposure_compensation);
+        println!("  enable_auto_color: {}", defaults.enable_auto_color);
+        println!("  skip_tone_curve: {}", defaults.skip_tone_curve);
+        println!("  enable_auto_exposure: {}", defaults.enable_auto_exposure);
+        #[cfg(debug_assertions)]
+        {
+            println!("  auto_levels_clip_percent: {}", defaults.auto_levels_clip_percent);
+            println!("  auto_color_strength: {}", defaults.auto_color_strength);
+            println!("  highlight_compression: {}", defaults.highlight_compression);
+            println!("  auto_exposure_strength: {}", defaults.auto_exposure_strength);
+        }
+        println!();
     }
 
     if !silent {
@@ -564,8 +644,12 @@ fn cmd_convert(
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
 
-    // Parse inversion mode if specified
+    // Parse inversion mode if specified (debug-only option)
+    #[cfg(debug_assertions)]
     let inversion_mode = parse_inversion_mode(inversion.as_deref())?;
+    #[cfg(not(debug_assertions))]
+    let inversion_mode: Option<invers_core::models::InversionMode> = None;
+    #[allow(clippy::collapsible_if)]
     if !silent {
         if let Some(mode) = &inversion_mode {
             println!("Using inversion mode: {:?}", mode);
@@ -1337,6 +1421,7 @@ fn copy_dir_contents(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 #[allow(clippy::too_many_arguments)]
 fn cmd_diagnose(
     original: PathBuf,
@@ -1462,6 +1547,7 @@ fn cmd_diagnose(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 #[allow(clippy::too_many_arguments)]
 fn cmd_test_params(
     original: PathBuf,

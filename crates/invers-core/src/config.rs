@@ -53,25 +53,108 @@ impl PipelineConfigHandle {
 #[serde(default)]
 pub struct PipelineConfig {
     pub defaults: PipelineDefaults,
+    #[cfg(debug_assertions)]
     pub testing: TestingConfig,
 }
 
 impl PipelineConfig {
+    #[allow(dead_code)] // Only used in debug builds
     fn sanitize(mut self) -> Self {
         self.defaults.sanitize();
-        if let Some(ref mut defaults) = self.testing.parameter_test_defaults {
-            defaults.sanitize();
-        }
-        if let Some(ref mut grid) = self.testing.default_grid {
-            grid.sanitize_with(TestingGridValues::default_grid());
-        }
-        if let Some(ref mut grid) = self.testing.minimal_grid {
-            grid.sanitize_with(TestingGridValues::minimal_grid());
-        }
-        if let Some(ref mut grid) = self.testing.comprehensive_grid {
-            grid.sanitize_with(TestingGridValues::comprehensive_grid());
+        #[cfg(debug_assertions)]
+        {
+            if let Some(ref mut defaults) = self.testing.parameter_test_defaults {
+                defaults.sanitize();
+            }
+            if let Some(ref mut grid) = self.testing.default_grid {
+                grid.sanitize_with(TestingGridValues::default_grid());
+            }
+            if let Some(ref mut grid) = self.testing.minimal_grid {
+                grid.sanitize_with(TestingGridValues::minimal_grid());
+            }
+            if let Some(ref mut grid) = self.testing.comprehensive_grid {
+                grid.sanitize_with(TestingGridValues::comprehensive_grid());
+            }
         }
         self
+    }
+}
+
+/// Simplified configuration for release builds.
+/// Only contains the essential options users typically need to adjust.
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct SimplePipelineConfig {
+    pub defaults: SimplePipelineDefaults,
+}
+
+/// Essential pipeline defaults for release builds.
+/// For advanced tuning, use a debug build.
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SimplePipelineDefaults {
+    /// Method for inverting negative to positive (MaskAware, Linear, etc.)
+    pub inversion_mode: InversionMode,
+    /// Enable automatic level adjustment
+    pub enable_auto_levels: bool,
+    /// Preserve shadow/highlight headroom
+    pub preserve_headroom: bool,
+    /// Manual exposure compensation (1.0 = no change)
+    pub exposure_compensation: f32,
+    /// Enable automatic color correction
+    pub enable_auto_color: bool,
+    /// Skip tone curve application
+    pub skip_tone_curve: bool,
+    /// Enable automatic exposure adjustment to normalize brightness
+    pub enable_auto_exposure: bool,
+}
+
+#[cfg(not(debug_assertions))]
+impl Default for SimplePipelineDefaults {
+    fn default() -> Self {
+        Self {
+            inversion_mode: InversionMode::MaskAware,
+            enable_auto_levels: true,
+            preserve_headroom: true,
+            exposure_compensation: 1.0,
+            enable_auto_color: true,
+            skip_tone_curve: false,
+            enable_auto_exposure: true,
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+impl SimplePipelineDefaults {
+    /// Convert to full PipelineDefaults, filling in non-configurable options with hardcoded values
+    pub fn to_full_defaults(&self) -> PipelineDefaults {
+        PipelineDefaults {
+            inversion_mode: self.inversion_mode,
+            enable_auto_levels: self.enable_auto_levels,
+            preserve_headroom: self.preserve_headroom,
+            exposure_compensation: self.exposure_compensation,
+            enable_auto_color: self.enable_auto_color,
+            skip_tone_curve: self.skip_tone_curve,
+            // Hardcoded values for release builds (advanced tuning requires debug build)
+            // Data-preserving defaults for maximum editing latitude
+            auto_levels_clip_percent: 0.0, // No highlight clipping
+            auto_color_strength: 1.0,
+            auto_color_min_gain: 0.7,
+            auto_color_max_gain: 1.3,
+            base_brightest_percent: 5.0,
+            base_sampling_mode: BaseSamplingMode::Median,
+            shadow_lift_mode: ShadowLiftMode::Percentile,
+            shadow_lift_value: 0.02,
+            highlight_compression: 1.0, // No highlight compression
+            enable_auto_exposure: self.enable_auto_exposure,
+            auto_exposure_target_median: 0.63, // Optimized for typical film negatives
+            auto_exposure_strength: 1.0,
+            auto_exposure_min_gain: 0.3,
+            auto_exposure_max_gain: 5.0, // Allow significant boost for underexposed negatives
+            skip_color_matrix: false,
+        }
     }
 }
 
@@ -103,6 +186,7 @@ pub struct PipelineDefaults {
 }
 
 impl PipelineDefaults {
+    #[allow(dead_code)] // Only used in debug builds
     pub(crate) fn sanitize(&mut self) {
         self.auto_levels_clip_percent = self.auto_levels_clip_percent.clamp(0.0, 10.0);
         self.auto_color_min_gain = self.auto_color_min_gain.max(0.1);
@@ -132,7 +216,7 @@ impl Default for PipelineDefaults {
             auto_color_max_gain: 1.3,
             base_brightest_percent: 5.0,
             base_sampling_mode: BaseSamplingMode::Median,
-            inversion_mode: InversionMode::Linear,
+            inversion_mode: InversionMode::MaskAware,
             shadow_lift_mode: ShadowLiftMode::Percentile,
             shadow_lift_value: 0.02,
             highlight_compression: 1.0,
@@ -148,7 +232,8 @@ impl Default for PipelineDefaults {
     }
 }
 
-/// Testing-related configuration overrides.
+/// Testing-related configuration overrides (debug builds only).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct TestingConfig {
@@ -158,7 +243,8 @@ pub struct TestingConfig {
     pub comprehensive_grid: Option<TestingGridValues>,
 }
 
-/// Defaults for a single parameter test run.
+/// Defaults for a single parameter test run (debug builds only).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ParameterTestDefaults {
@@ -184,6 +270,7 @@ pub struct ParameterTestDefaults {
     pub auto_exposure_max_gain: f32,
 }
 
+#[cfg(debug_assertions)]
 impl ParameterTestDefaults {
     pub(crate) fn sanitize(&mut self) {
         self.clip_percent = self.clip_percent.clamp(0.0, 10.0);
@@ -203,6 +290,7 @@ impl ParameterTestDefaults {
     }
 }
 
+#[cfg(debug_assertions)]
 impl Default for ParameterTestDefaults {
     fn default() -> Self {
         Self {
@@ -214,7 +302,7 @@ impl Default for ParameterTestDefaults {
             auto_color_max_gain: 1.3,
             base_brightest_percent: 5.0,
             base_sampling_mode: BaseSamplingMode::Median,
-            inversion_mode: InversionMode::Linear,
+            inversion_mode: InversionMode::MaskAware,
             shadow_lift_mode: ShadowLiftMode::Percentile,
             shadow_lift_value: 0.02,
             highlight_compression: 1.0,
@@ -230,7 +318,8 @@ impl Default for ParameterTestDefaults {
     }
 }
 
-/// Configurable grid of parameter values for batch testing.
+/// Configurable grid of parameter values for batch testing (debug builds only).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct TestingGridValues {
@@ -249,6 +338,7 @@ pub struct TestingGridValues {
     pub exposure_compensation: Vec<f32>,
 }
 
+#[cfg(debug_assertions)]
 impl TestingGridValues {
     pub(crate) fn sanitize_with(&mut self, defaults: TestingGridValues) {
         if self.auto_levels.is_empty() {
@@ -332,7 +422,7 @@ impl TestingGridValues {
             auto_color_max_gain: vec![1.2, 1.3],
             base_brightest_percent: vec![5.0, 10.0, 15.0],
             base_sampling_mode: vec![BaseSamplingMode::Median],
-            inversion_mode: vec![InversionMode::Linear],
+            inversion_mode: vec![InversionMode::MaskAware],
             shadow_lift_mode: vec![ShadowLiftMode::Percentile],
             shadow_lift_value: vec![0.02],
             tone_curve_strength: vec![0.4, 0.5, 0.6, 0.7],
@@ -350,7 +440,7 @@ impl TestingGridValues {
             auto_color_max_gain: vec![1.3],
             base_brightest_percent: vec![5.0, 10.0],
             base_sampling_mode: vec![BaseSamplingMode::Median],
-            inversion_mode: vec![InversionMode::Linear],
+            inversion_mode: vec![InversionMode::MaskAware],
             shadow_lift_mode: vec![ShadowLiftMode::Percentile],
             shadow_lift_value: vec![0.02],
             tone_curve_strength: vec![0.4, 0.5, 0.6],
@@ -368,7 +458,7 @@ impl TestingGridValues {
             auto_color_max_gain: vec![1.1, 1.2, 1.3, 1.4],
             base_brightest_percent: vec![5.0, 10.0, 15.0, 20.0],
             base_sampling_mode: vec![BaseSamplingMode::Median, BaseSamplingMode::Mean],
-            inversion_mode: vec![InversionMode::Linear],
+            inversion_mode: vec![InversionMode::MaskAware],
             shadow_lift_mode: vec![ShadowLiftMode::Percentile],
             shadow_lift_value: vec![0.015, 0.02, 0.03],
             tone_curve_strength: vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
@@ -377,6 +467,7 @@ impl TestingGridValues {
     }
 }
 
+#[cfg(debug_assertions)]
 impl Default for TestingGridValues {
     fn default() -> Self {
         Self::default_grid()
@@ -384,8 +475,74 @@ impl Default for TestingGridValues {
 }
 
 /// Load configuration from disk, optionally forcing a specific path.
+/// In release builds, only loads simplified config (6 essential options).
+/// In debug builds, loads full config including testing parameters.
 pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle {
     let mut warnings = Vec::new();
+    let candidates = get_config_candidates(custom_path);
+
+    for candidate in candidates {
+        if !candidate.exists() || !candidate.is_file() {
+            continue;
+        }
+
+        match fs::read_to_string(&candidate) {
+            Ok(contents) => {
+                // In debug builds, load full config
+                #[cfg(debug_assertions)]
+                {
+                    match serde_yaml::from_str::<PipelineConfig>(&contents) {
+                        Ok(config) => {
+                            let sanitized = config.sanitize();
+                            let source = fs::canonicalize(&candidate).unwrap_or(candidate);
+                            return PipelineConfigHandle::with_config(
+                                sanitized,
+                                Some(source),
+                                warnings,
+                            );
+                        }
+                        Err(err) => warnings.push(format!(
+                            "Failed to parse pipeline config {}: {}",
+                            candidate.display(),
+                            err
+                        )),
+                    }
+                }
+
+                // In release builds, load simplified config only
+                #[cfg(not(debug_assertions))]
+                {
+                    match serde_yaml::from_str::<SimplePipelineConfig>(&contents) {
+                        Ok(simple_config) => {
+                            let full_defaults = simple_config.defaults.to_full_defaults();
+                            let config = PipelineConfig {
+                                defaults: full_defaults,
+                            };
+                            let source = fs::canonicalize(&candidate).unwrap_or(candidate);
+                            return PipelineConfigHandle::with_config(config, Some(source), warnings);
+                        }
+                        Err(err) => warnings.push(format!(
+                            "Failed to parse pipeline config {}: {}",
+                            candidate.display(),
+                            err
+                        )),
+                    }
+                }
+            }
+            Err(err) => warnings.push(format!(
+                "Failed to read pipeline config {}: {}",
+                candidate.display(),
+                err
+            )),
+        }
+    }
+
+    warnings.push("No pipeline config found; using built-in defaults.".to_string());
+    PipelineConfigHandle::with_config(PipelineConfig::default(), None, warnings)
+}
+
+/// Get list of config file candidates to try
+fn get_config_candidates(custom_path: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(path) = custom_path {
@@ -409,34 +566,7 @@ pub fn load_pipeline_config(custom_path: Option<&Path>) -> PipelineConfigHandle 
         }
     }
 
-    for candidate in candidates {
-        if !candidate.exists() || !candidate.is_file() {
-            continue;
-        }
-
-        match fs::read_to_string(&candidate) {
-            Ok(contents) => match serde_yaml::from_str::<PipelineConfig>(&contents) {
-                Ok(config) => {
-                    let sanitized = config.sanitize();
-                    let source = fs::canonicalize(&candidate).unwrap_or(candidate);
-                    return PipelineConfigHandle::with_config(sanitized, Some(source), warnings);
-                }
-                Err(err) => warnings.push(format!(
-                    "Failed to parse pipeline config {}: {}",
-                    candidate.display(),
-                    err
-                )),
-            },
-            Err(err) => warnings.push(format!(
-                "Failed to read pipeline config {}: {}",
-                candidate.display(),
-                err
-            )),
-        }
-    }
-
-    warnings.push("No pipeline config found; using built-in defaults.".to_string());
-    PipelineConfigHandle::with_config(PipelineConfig::default(), None, warnings)
+    candidates
 }
 
 static PIPELINE_CONFIG_HANDLE: OnceLock<PipelineConfigHandle> = OnceLock::new();

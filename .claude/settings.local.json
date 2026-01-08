@@ -35,7 +35,17 @@
       "Bash(./scripts/update-formula.sh:*)",
       "Bash(tar:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(./target/debug/invers convert:*)",
+      "Bash(./target/debug/invers:*)",
+      "Bash(ls:*)",
+      "Bash(for f in \"/Users/aaronanderson/Pictures/imacon-scans/city- 001.tif\" \"/Users/aaronanderson/Pictures/imacon-scans/city- 005.tif\" \"/Users/aaronanderson/Pictures/imacon-scans/city- 005-small.tif\" \"/Users/aaronanderson/Pictures/imacon-scans/city-nowb.tiff\")",
+      "Bash(do echo \"$f:\")",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

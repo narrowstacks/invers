@@ -6,11 +6,15 @@ pub mod auto_adjust;
 pub mod color;
 pub mod config;
 pub mod decoders;
-pub mod diagnostics;
 pub mod exporters;
 pub mod models;
 pub mod pipeline;
 pub mod presets;
+
+// Debug-only modules
+#[cfg(debug_assertions)]
+pub mod diagnostics;
+#[cfg(debug_assertions)]
 pub mod testing;
 
 // GPU acceleration module (optional, enabled with "gpu" feature)

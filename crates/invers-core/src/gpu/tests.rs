@@ -247,6 +247,8 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
         auto_color_max_gain: 1.5,
         base_brightest_percent: 15.0,
         base_sampling_mode: BaseSamplingMode::Median,
+        base_estimation_method: BaseEstimationMethod::Regions,
+        auto_levels_mode: AutoLevelsMode::PerChannel,
         inversion_mode: InversionMode::Linear, // Simplest mode for testing
         shadow_lift_mode: ShadowLiftMode::None,
         shadow_lift_value: 0.0,

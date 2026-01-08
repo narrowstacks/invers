@@ -51,8 +51,9 @@ pub fn decode_image<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     match extension.as_str() {
         "tif" | "tiff" => decode_tiff(path),
         "png" => decode_png(path),
-        // RAW formats would go here (CR2, CR3, NEF, ARW, etc.)
-        // "cr2" | "cr3" | "nef" | "arw" => decode_raw(path),
+        // RAW formats (via rsraw/LibRaw)
+        "cr2" | "cr3" | "nef" | "nrw" | "arw" | "raf" | "rw2" | "orf" | "pef" | "dng" | "3fr"
+        | "fff" | "iiq" | "rwl" | "raw" => decode_raw(path),
         _ => Err(format!("Unsupported file format: {}", extension)),
     }
 }
@@ -686,11 +687,125 @@ fn decode_png_rgba16(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>,
     Ok((rgb_data, 3))
 }
 
-/// Decode a RAW file using libraw
-#[allow(dead_code)]
-fn decode_raw<P: AsRef<Path>>(_path: P) -> Result<DecodedImage, String> {
-    // TODO: Implement RAW decoding via libraw FFI
-    Err("RAW decoding not yet implemented".to_string())
+/// Decode a RAW file using rsraw (LibRaw wrapper)
+fn decode_raw<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
+    use rsraw::{RawImage, BIT_DEPTH_16};
+    use std::convert::AsMut;
+
+    // Read file into buffer
+    let data =
+        std::fs::read(path.as_ref()).map_err(|e| format!("Failed to read RAW file: {}", e))?;
+
+    // Open RAW file
+    let mut raw =
+        RawImage::open(&data).map_err(|e| format!("Failed to open RAW file: {:?}", e))?;
+
+    // Configure LibRaw processing parameters via low-level access
+    // SAFETY: rsraw provides safe AsMut access to libraw_data_t
+    {
+        let libraw_data: &mut rsraw_sys::libraw_data_t = raw.as_mut();
+        // Use AHD demosaic (best quality for film scanning)
+        // 0 = linear, 1 = VNG, 2 = PPG, 3 = AHD
+        libraw_data.params.user_qual = 3;
+        // Disable automatic brightness adjustment (we handle this in pipeline)
+        libraw_data.params.no_auto_bright = 1;
+        // Use camera white balance if available
+        libraw_data.params.use_camera_wb = 1;
+    }
+
+    // Unpack the RAW data (modifies raw in place)
+    raw.unpack()
+        .map_err(|e| format!("Failed to unpack RAW data: {:?}", e))?;
+
+    // Process to 16-bit output (best quality for film scanning)
+    let processed = raw
+        .process::<BIT_DEPTH_16>()
+        .map_err(|e| format!("Failed to process RAW: {:?}", e))?;
+
+    let width = processed.width();
+    let height = processed.height();
+    let channels = processed.colors() as u8;
+
+    // Get raw pixel data (ProcessedImage<BIT_DEPTH_16> derefs to &[u16])
+    let pixel_data: &[u16] = &processed;
+    let data = convert_raw_u16_to_f32_rgb(pixel_data, width, height, channels)?;
+
+    let is_monochrome = detect_monochrome(&data, width, height);
+
+    Ok(DecodedImage {
+        width,
+        height,
+        data,
+        channels: 3,
+        // rsraw's high-level API doesn't expose black/white levels or color matrices
+        // These would need to be accessed via rsraw-sys for low-level LibRaw access
+        black_level: None,
+        white_level: None,
+        color_matrix: None,
+        source_is_grayscale: false,
+        is_monochrome,
+    })
+}
+
+/// Convert RAW pixel data (16-bit u16 slice) to f32 linear RGB (0.0-1.0)
+/// Uses parallel processing via rayon for large images
+fn convert_raw_u16_to_f32_rgb(
+    pixel_data: &[u16],
+    width: u32,
+    height: u32,
+    channels: u8,
+) -> Result<Vec<f32>, String> {
+    use rayon::prelude::*;
+
+    let pixel_count = (width * height) as usize;
+    let expected_len = pixel_count * channels as usize;
+
+    if pixel_data.len() < expected_len {
+        return Err(format!(
+            "RAW buffer size mismatch: expected at least {}, got {}",
+            expected_len,
+            pixel_data.len()
+        ));
+    }
+
+    let rgb_data = if channels == 3 {
+        // RGB data: 3 u16 values per pixel - parallel conversion
+        pixel_data[..expected_len]
+            .par_chunks_exact(3)
+            .flat_map(|pixel| {
+                [
+                    pixel[0] as f32 / 65535.0,
+                    pixel[1] as f32 / 65535.0,
+                    pixel[2] as f32 / 65535.0,
+                ]
+            })
+            .collect()
+    } else if channels == 4 {
+        // RGBA data: drop alpha channel - parallel conversion
+        pixel_data[..pixel_count * 4]
+            .par_chunks_exact(4)
+            .flat_map(|pixel| {
+                [
+                    pixel[0] as f32 / 65535.0,
+                    pixel[1] as f32 / 65535.0,
+                    pixel[2] as f32 / 65535.0,
+                ]
+            })
+            .collect()
+    } else if channels == 1 {
+        // Grayscale: expand to RGB - parallel conversion
+        pixel_data[..pixel_count]
+            .par_iter()
+            .flat_map(|&gray| {
+                let val = gray as f32 / 65535.0;
+                [val, val, val]
+            })
+            .collect()
+    } else {
+        return Err(format!("Unexpected RAW channel count: {}", channels));
+    };
+
+    Ok(rgb_data)
 }
 
 #[cfg(test)]

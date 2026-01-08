@@ -109,6 +109,26 @@ Working colorspace defaulted to "linear-rec2020" throughout the pipeline. All in
 - Serde used for YAML serialization of presets/profiles
 - RGB channel order: [R, G, B] in arrays and matrices
 
+### CPU/GPU Pipeline Parity (CRITICAL)
+
+**Any changes to the processing pipeline MUST be implemented in both CPU and GPU codepaths with 1:1 functional equivalence.**
+
+- CPU pipeline: `crates/invers-core/src/pipeline.rs`
+- GPU pipeline: `crates/invers-core/src/gpu/pipeline.rs`
+- GPU shaders: `crates/invers-core/src/gpu/shaders/` (WGSL files)
+  - `color_matrix.wgsl` - Color matrix transformations
+  - `tone_curve.wgsl` - Tone curve application
+  - `utility.wgsl` - Shared utility functions
+
+When modifying pipeline logic:
+1. Update the CPU implementation in `pipeline.rs`
+2. Update the corresponding GPU shader(s) in `gpu/shaders/`
+3. Update the GPU pipeline orchestration in `gpu/pipeline.rs` if needed
+4. Ensure both paths produce identical results (within floating-point tolerance)
+5. Run tests to verify CPU/GPU parity: `cargo test --features gpu`
+
+The GPU shaders must mirror the CPU algorithms exactly. Differences in results between CPU and GPU execution are bugs.
+
 ## Project Status
 
 Most functionality is currently unimplemented:

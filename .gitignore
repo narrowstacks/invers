@@ -32,3 +32,4 @@ OPTIMIZATION_SUMMARY.md
 
 docs/
 .claude/settings.local.json
+.cursor/debug.log
