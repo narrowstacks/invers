@@ -55,6 +55,12 @@ defaults:
   auto_color_min_gain: 0.7
   auto_color_max_gain: 1.3
 
+  # Maximum channel divergence for auto-color (0.0-1.0)
+  # Limits how much channels can be adjusted relative to each other.
+  # Lower values preserve more scene color character (warmth/coolness),
+  # higher values allow more aggressive neutralization.
+  auto_color_max_divergence: 0.15
+
   # Base estimation: percentage of brightest pixels to sample (1.0-30.0)
   base_brightest_percent: 5.0
 
@@ -94,6 +100,7 @@ testing:
     auto_color_strength: 0.6
     auto_color_min_gain: 0.7
     auto_color_max_gain: 1.3
+    auto_color_max_divergence: 0.15
     base_brightest_percent: 5.0
     base_sampling_mode: Median
     inversion_mode: Linear

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Invers is a film negative to positive conversion tool written in Rust. It processes scanned film negatives (color and B&W) and converts them to positive images while applying film-specific corrections, tone curves, and color matrices.
 
-The project is in early development with most core functionality stubbed out but the architecture defined.
+The core conversion pipeline is fully functional with CPU processing. GPU acceleration is partially implemented.
 
 ## Workspace Structure
 
@@ -14,19 +14,22 @@ This is a Cargo workspace with three crates:
 
 - **invers-core**: Core library containing all conversion logic, models, and utilities
 
-  - Image decoders (TIFF, PNG, planned RAW support)
+  - Image decoders (TIFF, PNG, RAW via LibRaw)
   - Processing pipeline (base estimation, inversion, tone mapping, color correction)
-  - Exporters (TIFF16, Linear DNG)
+  - Exporters (TIFF16 implemented, Linear DNG planned)
   - Preset and profile management (YAML-based)
   - Data models for film presets, scan profiles, and conversion options
+  - Auto-adjustment algorithms (levels, color, exposure, white balance)
+  - GPU acceleration (partial, feature-gated)
 
 - **invers-cli**: Command-line interface
 
   - Built with clap (derive API)
-  - Commands: convert, analyze-base, batch, preset (list/show/create)
-  - Most commands are currently unimplemented stubs
+  - Commands: convert, analyze, batch, preset (list/show/create), init
+  - Debug-only commands: diagnose, test-params
+  - All commands are fully implemented
 
-- **invers-gui**: Qt-based GUI (planned for M2)
+- **invers-gui**: Qt-based GUI (planned)
   - Currently a scaffold showing intended architecture
   - Will use cxx-qt for Rust/Qt integration
   - Modules: app_state, preview, roi_tool, ui, viewer
@@ -69,14 +72,15 @@ cargo clippy
 The conversion pipeline (crates/invers-core/src/pipeline.rs) follows these stages:
 
 1. **Decode**: Load image from TIFF/PNG/RAW (crates/invers-core/src/decoders.rs)
-2. **Base Estimation**: Calculate film base color from ROI or auto-detection
-3. **Base Subtraction & Inversion**: Subtract base, invert to positive (1.0 - negative)
-4. **Tone Mapping**: Apply film-specific tone curves
-5. **Color Correction**: Apply 3x3 color matrices
-6. **Colorspace Transform**: Convert to output colorspace (linear-rec2020 default)
-7. **Export**: Write to TIFF16 or Linear DNG (crates/invers-core/src/exporters.rs)
-
-All pipeline functions are currently stubs returning "not yet implemented" errors.
+2. **Base Estimation**: Calculate film base color (ROI, border-based, histogram-based, or region-based with fallback)
+3. **Inversion**: Multiple modes (Linear, Logarithmic, DivideBlend, MaskAware, BlackAndWhite)
+4. **Shadow Lift**: Adjustable shadow recovery (Fixed, Percentile, or None modes)
+5. **Highlight Compression**: Prevent highlight clipping
+6. **Auto Adjustments**: Optional auto-levels, auto-color, auto-exposure, auto white balance
+7. **Tone Mapping**: Apply film-specific tone curves (S-curve and asymmetric)
+8. **Color Correction**: Apply 3x3 color matrices and HSL adjustments
+9. **Colorspace Transform**: Convert to output colorspace (planned for M3)
+10. **Export**: Write to TIFF16 (crates/invers-core/src/exporters.rs)
 
 ### Data Models
 
@@ -116,11 +120,15 @@ Working colorspace defaulted to "linear-rec2020" throughout the pipeline. All in
 - CPU pipeline: `crates/invers-core/src/pipeline.rs`
 - GPU pipeline: `crates/invers-core/src/gpu/pipeline.rs`
 - GPU shaders: `crates/invers-core/src/gpu/shaders/` (WGSL files)
+  - `inversion.wgsl` - Negative inversion operations
   - `color_matrix.wgsl` - Color matrix transformations
+  - `color_convert.wgsl` - Colorspace conversions
   - `tone_curve.wgsl` - Tone curve application
+  - `histogram.wgsl` - GPU histogram computation
   - `utility.wgsl` - Shared utility functions
 
 When modifying pipeline logic:
+
 1. Update the CPU implementation in `pipeline.rs`
 2. Update the corresponding GPU shader(s) in `gpu/shaders/`
 3. Update the GPU pipeline orchestration in `gpu/pipeline.rs` if needed
@@ -131,16 +139,26 @@ The GPU shaders must mirror the CPU algorithms exactly. Differences in results b
 
 ## Project Status
 
-Most functionality is currently unimplemented:
+### Fully Implemented
 
-- Decoders (TIFF, PNG, RAW) - stubs only
-- Pipeline functions (base estimation, inversion, tone mapping, color correction) - stubs only
-- Exporters (TIFF16, DNG) - stubs only
-- CLI commands (convert, analyze-base, batch, preset show/create) - stubs only
-- GUI - architecture defined, M2 implementation planned
+- **Decoders**: TIFF (all bit depths), PNG (8/16-bit), RAW (via LibRaw with AHD demosaic)
+- **Base Estimation**: ROI-based, border-based, histogram-based, region-based with validation
+- **Inversion**: 5 modes (Linear, Logarithmic, DivideBlend, MaskAware, BlackAndWhite)
+- **Tone Curves**: S-curve and asymmetric curve application
+- **Color Correction**: 3x3 matrix transforms, HSL adjustments
+- **Auto Adjustments**: Auto-levels, auto-color, auto-exposure, white balance (temperature/tint)
+- **Shadow/Highlight**: Shadow lift (Fixed/Percentile/None), highlight compression
+- **Exporters**: TIFF16 (RGB and grayscale)
+- **CLI Commands**: convert, analyze, batch, preset (list/show/create), init
+- **Debug Tools**: diagnose (comparison with third-party software), test-params (parameter optimization)
+- **Preset Management**: YAML-based film presets and scan profiles
 
-Working functionality:
+### Partially Implemented
 
-- Preset listing (cmd_preset_list in CLI)
-- Basic CLI argument parsing
-- Data model structures complete
+- **GPU Pipeline**: Framework in place with WGPU, some stages implemented (inversion, shadow lift, highlight compression). Falls back to CPU when unavailable.
+
+### Not Yet Implemented
+
+- **Linear DNG Export**: Stub only
+- **Colorspace Transform**: Planned for M3
+- **GUI**: Architecture defined, implementation planned

@@ -94,10 +94,7 @@ pub fn transform_colorspace(
 
 /// Multiply two 3x3 matrices: result = a * b
 #[inline]
-fn multiply_3x3_matrices(
-    a: &[[f32; 3]; 3],
-    b: &[[f32; 3]; 3],
-) -> [[f32; 3]; 3] {
+fn multiply_3x3_matrices(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let mut result = [[0.0f32; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
@@ -116,84 +113,6 @@ fn apply_3x3_matrix_to_pixel(pixel: &mut [f32], matrix: &[[f32; 3]; 3]) {
     pixel[0] = matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b;
     pixel[1] = matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b;
     pixel[2] = matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b;
-}
-
-// =============================================================================
-// Bradford Chromatic Adaptation (for future use with different illuminants)
-// =============================================================================
-
-/// Bradford chromatic adaptation matrix
-/// Used to adapt colors between different white points (illuminants)
-#[allow(dead_code)]
-const BRADFORD: [[f32; 3]; 3] = [
-    [0.8951, 0.2664, -0.1614],
-    [-0.7502, 1.7135, 0.0367],
-    [0.0389, -0.0685, 1.0296],
-];
-
-/// Inverse Bradford matrix
-#[allow(dead_code)]
-const BRADFORD_INV: [[f32; 3]; 3] = [
-    [0.9869929, -0.1470543, 0.1599627],
-    [0.4323053, 0.5183603, 0.0492912],
-    [-0.0085287, 0.0400428, 0.9684867],
-];
-
-/// D50 white point (used by ProPhoto RGB)
-#[allow(dead_code)]
-const D50_X: f32 = 0.96422;
-#[allow(dead_code)]
-const D50_Y: f32 = 1.00000;
-#[allow(dead_code)]
-const D50_Z: f32 = 0.82521;
-
-/// Compute Bradford chromatic adaptation matrix from source to destination white point
-///
-/// # Arguments
-/// * `src_white` - Source white point as (X, Y, Z)
-/// * `dst_white` - Destination white point as (X, Y, Z)
-///
-/// # Returns
-/// 3x3 chromatic adaptation matrix
-#[allow(dead_code)]
-fn compute_bradford_adaptation(
-    src_white: (f32, f32, f32),
-    dst_white: (f32, f32, f32),
-) -> [[f32; 3]; 3] {
-    // Convert white points to cone response domain
-    let src_cone = [
-        BRADFORD[0][0] * src_white.0 + BRADFORD[0][1] * src_white.1 + BRADFORD[0][2] * src_white.2,
-        BRADFORD[1][0] * src_white.0 + BRADFORD[1][1] * src_white.1 + BRADFORD[1][2] * src_white.2,
-        BRADFORD[2][0] * src_white.0 + BRADFORD[2][1] * src_white.1 + BRADFORD[2][2] * src_white.2,
-    ];
-    let dst_cone = [
-        BRADFORD[0][0] * dst_white.0 + BRADFORD[0][1] * dst_white.1 + BRADFORD[0][2] * dst_white.2,
-        BRADFORD[1][0] * dst_white.0 + BRADFORD[1][1] * dst_white.1 + BRADFORD[1][2] * dst_white.2,
-        BRADFORD[2][0] * dst_white.0 + BRADFORD[2][1] * dst_white.1 + BRADFORD[2][2] * dst_white.2,
-    ];
-
-    // Diagonal scaling matrix
-    let scale = [
-        [dst_cone[0] / src_cone[0], 0.0, 0.0],
-        [0.0, dst_cone[1] / src_cone[1], 0.0],
-        [0.0, 0.0, dst_cone[2] / src_cone[2]],
-    ];
-
-    // Combined: bradford_inv * scale * bradford
-    let temp = multiply_3x3_matrices(&scale, &BRADFORD);
-    multiply_3x3_matrices(&BRADFORD_INV, &temp)
-}
-
-/// Load an ICC profile from file
-pub fn load_icc_profile<P: AsRef<std::path::Path>>(_path: P) -> Result<Vec<u8>, String> {
-    // TODO: Implement ICC profile loading
-    Err("ICC profile loading not yet implemented".to_string())
-}
-
-/// Get the default ICC profile for a colorspace
-pub fn get_default_icc_profile(_colorspace: Colorspace) -> Result<Vec<u8>, String> {
-    // TODO: Embed or generate default ICC profiles
-    Err("Default ICC profiles not yet implemented".to_string())
 }
 
 // =============================================================================
@@ -383,6 +302,7 @@ const XYZ_TO_REC2020: [[f32; 3]; 3] = [
 ];
 
 /// ProPhoto RGB to XYZ matrix (D50, adapted to D65)
+#[allow(clippy::excessive_precision)]
 const PROPHOTO_TO_XYZ: [[f32; 3]; 3] = [
     [0.7976749, 0.1351917, 0.0313534],
     [0.2880402, 0.7118741, 0.0000857],
@@ -404,6 +324,7 @@ const DISPLAYP3_TO_XYZ: [[f32; 3]; 3] = [
 ];
 
 /// XYZ to Display P3 matrix (D65)
+#[allow(clippy::excessive_precision)]
 const XYZ_TO_DISPLAYP3: [[f32; 3]; 3] = [
     [2.4934969, -0.9313836, -0.4027108],
     [-0.8294890, 1.7626641, 0.0236247],

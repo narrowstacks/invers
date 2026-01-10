@@ -28,6 +28,7 @@ pub struct ParameterTest {
     pub auto_color_strength: f32,
     pub auto_color_min_gain: f32,
     pub auto_color_max_gain: f32,
+    pub auto_color_max_divergence: f32,
 
     // Base estimation
     pub base_brightest_percent: f32,
@@ -138,6 +139,7 @@ pub struct ParameterGrid {
     pub auto_color_strength: Vec<f32>,
     pub auto_color_min_gain: Vec<f32>,
     pub auto_color_max_gain: Vec<f32>,
+    pub auto_color_max_divergence: Vec<f32>,
     pub base_brightest_percent: Vec<f32>,
     pub base_sampling_mode: Vec<BaseSamplingMode>,
     pub inversion_mode: Vec<InversionMode>,
@@ -225,6 +227,7 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         auto_color_strength: params.auto_color_strength,
         auto_color_min_gain: params.auto_color_min_gain,
         auto_color_max_gain: params.auto_color_max_gain,
+        auto_color_max_divergence: params.auto_color_max_divergence,
         base_brightest_percent: params.base_brightest_percent,
         base_sampling_mode: params.base_sampling_mode,
         base_estimation_method: crate::models::BaseEstimationMethod::default(),
@@ -241,7 +244,17 @@ pub fn run_parameter_test<P: AsRef<Path>>(
         no_clip: false,
         enable_auto_wb: false,
         auto_wb_strength: 1.0,
+        auto_wb_mode: crate::models::AutoWbMode::default(),
         use_gpu: false,
+        // Research pipeline options (use defaults for legacy testing)
+        pipeline_mode: crate::models::PipelineMode::Legacy,
+        density_balance: None,
+        neutral_point: None,
+        density_balance_red: None,
+        density_balance_blue: None,
+        tone_curve_override: None,
+        // Curves-based pipeline options
+        cb_options: None,
     };
 
     // Process with our pipeline
@@ -302,6 +315,7 @@ pub fn run_parameter_test_preloaded(
         auto_color_strength: params.auto_color_strength,
         auto_color_min_gain: params.auto_color_min_gain,
         auto_color_max_gain: params.auto_color_max_gain,
+        auto_color_max_divergence: params.auto_color_max_divergence,
         base_brightest_percent: params.base_brightest_percent,
         base_sampling_mode: params.base_sampling_mode,
         base_estimation_method: crate::models::BaseEstimationMethod::default(),
@@ -318,7 +332,17 @@ pub fn run_parameter_test_preloaded(
         no_clip: false,
         enable_auto_wb: false,
         auto_wb_strength: 1.0,
+        auto_wb_mode: crate::models::AutoWbMode::default(),
         use_gpu: false,
+        // Research pipeline options (use defaults for legacy testing)
+        pipeline_mode: crate::models::PipelineMode::Legacy,
+        density_balance: None,
+        neutral_point: None,
+        density_balance_red: None,
+        density_balance_blue: None,
+        tone_curve_override: None,
+        // Curves-based pipeline options
+        cb_options: None,
     };
 
     // Process with our pipeline - clone original since process_image consumes it
@@ -369,6 +393,7 @@ impl From<config::ParameterTestDefaults> for ParameterTest {
             auto_color_strength: defaults.auto_color_strength,
             auto_color_min_gain: defaults.auto_color_min_gain,
             auto_color_max_gain: defaults.auto_color_max_gain,
+            auto_color_max_divergence: defaults.auto_color_max_divergence,
             base_brightest_percent: defaults.base_brightest_percent,
             base_sampling_mode: defaults.base_sampling_mode,
             inversion_mode: defaults.inversion_mode,
@@ -396,6 +421,7 @@ impl From<config::TestingGridValues> for ParameterGrid {
             auto_color_strength: values.auto_color_strength,
             auto_color_min_gain: values.auto_color_min_gain,
             auto_color_max_gain: values.auto_color_max_gain,
+            auto_color_max_divergence: values.auto_color_max_divergence,
             base_brightest_percent: values.base_brightest_percent,
             base_sampling_mode: values.base_sampling_mode,
             inversion_mode: values.inversion_mode,
@@ -501,6 +527,11 @@ pub fn run_parameter_grid_search<P: AsRef<Path>>(
                                                             auto_color_strength,
                                                             auto_color_min_gain,
                                                             auto_color_max_gain,
+                                                            auto_color_max_divergence: grid
+                                                                .auto_color_max_divergence
+                                                                .first()
+                                                                .copied()
+                                                                .unwrap_or(0.15),
                                                             base_brightest_percent,
                                                             base_sampling_mode,
                                                             inversion_mode,
@@ -689,6 +720,11 @@ fn build_parameter_combinations(grid: &ParameterGrid) -> Vec<ParameterTest> {
                                                             auto_color_strength,
                                                             auto_color_min_gain,
                                                             auto_color_max_gain,
+                                                            auto_color_max_divergence: grid
+                                                                .auto_color_max_divergence
+                                                                .first()
+                                                                .copied()
+                                                                .unwrap_or(0.15),
                                                             base_brightest_percent,
                                                             base_sampling_mode,
                                                             inversion_mode,
@@ -911,6 +947,7 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
         auto_color_strength: vec![0.6, 0.8],
         auto_color_min_gain: vec![0.7],
         auto_color_max_gain: vec![1.3],
+        auto_color_max_divergence: vec![0.15],
         base_brightest_percent: vec![10.0, 20.0],
         base_sampling_mode: vec![BaseSamplingMode::Median],
         inversion_mode: vec![InversionMode::Linear],
@@ -973,6 +1010,7 @@ pub fn run_adaptive_grid_search<P: AsRef<Path>>(
                 best_params.auto_color_max_gain,
                 (best_params.auto_color_max_gain * 1.1).clamp(1.0, 1.6),
             ],
+            auto_color_max_divergence: vec![best_params.auto_color_max_divergence],
             base_brightest_percent: vec![
                 (best_params.base_brightest_percent - 2.0).max(5.0),
                 best_params.base_brightest_percent,

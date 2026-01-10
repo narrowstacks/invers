@@ -3,6 +3,7 @@
 //! Core functionality for film negative to positive conversion.
 
 pub mod auto_adjust;
+pub mod cb_pipeline;
 pub mod color;
 pub mod config;
 pub mod decoders;
@@ -23,7 +24,11 @@ pub mod gpu;
 
 // Re-export commonly used types
 pub use color::{Hsl, Lab};
-pub use models::{BaseEstimation, ConvertOptions, FilmPreset, HslAdjustments, ScanProfile};
+pub use models::{
+    BaseEstimation, CbColorModel, CbEnginePreset, CbEnhancedProfile, CbFilmCharacter, CbLayerOrder,
+    CbOptions, CbSourceType, CbToneProfile, CbWbMethod, CbWbPreset, CbWbTonality, ConvertOptions,
+    FilmPreset, HslAdjustments, PipelineMode, ScanProfile,
+};
 
 // Re-export GPU functions when available
 #[cfg(feature = "gpu")]

@@ -451,5 +451,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Built with Rust and the amazing ecosystem of image processing crates
-- Inspired by professional film scanning workflows and tools like Grain2Pixel and NegativeLabPro.
+- Inspired by professional film scanning workflows and tools like Grain2Pixel.
 - Evan Dorsky's [Why is Color Negative Film Orange?](https://observablehq.com/@dorskyee/understanding-color-film)
