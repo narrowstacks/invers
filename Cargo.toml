@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/invers-raw",
     "crates/invers-core",
     "crates/invers-cli"
     ]

@@ -129,24 +129,7 @@ fn execute_pipeline(
         apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
     }
 
-    // Stage 8: Auto-color (if enabled, skip if auto-wb was applied)
-    if options.enable_auto_color && !options.enable_auto_wb {
-        // Build histogram if not already done
-        clear_histogram(ctx, histogram)?;
-        accumulate_histogram(ctx, image, histogram)?;
-        let [hist_r, hist_g, hist_b] = histogram.download()?;
-
-        let color_gains = compute_auto_color_gains(&hist_r, &hist_g, &hist_b, options);
-        let strength = options.auto_color_strength;
-        let adjusted_gains = [
-            1.0 + strength * (color_gains[0] - 1.0),
-            1.0 + strength * (color_gains[1] - 1.0),
-            1.0 + strength * (color_gains[2] - 1.0),
-        ];
-        apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
-    }
-
-    // Stage 9: Auto-exposure (if enabled)
+    // Stage 8: Auto-exposure (if enabled)
     if options.enable_auto_exposure {
         let exposure_gain = compute_exposure_gain_cpu(image, ctx, options)?;
         let strength = options.auto_exposure_strength;
@@ -159,7 +142,14 @@ fn execute_pipeline(
         apply_exposure(ctx, image, options.exposure_compensation, 1.0, pixel_count)?;
     }
 
-    // Stage 11: Color matrix (if film preset has one)
+    // Stage 11: Auto-color (if enabled) - after exposure so it corrects the final tonal distribution
+    // Uses midtone-weighted means to prioritize neutral midtones
+    if options.enable_auto_color {
+        let color_gains = compute_auto_color_gains_fullimage(image, ctx, options)?;
+        apply_gains(ctx, image, color_gains, [0.0, 0.0, 0.0], pixel_count)?;
+    }
+
+    // Stage 12: Color matrix (if film preset has one)
     if !options.skip_color_matrix {
         if let Some(ref preset) = options.film_preset {
             // Check if matrix is not identity
@@ -180,12 +170,12 @@ fn execute_pipeline(
         }
     }
 
-    // Stage 12: Tone curve
+    // Stage 13: Tone curve
     if !options.skip_tone_curve {
         apply_tone_curve(ctx, image, options, pixel_count)?;
     }
 
-    // Stage 13: HSL adjustments (if scan profile has them)
+    // Stage 14: HSL adjustments (if scan profile has them)
     if let Some(ref profile) = options.scan_profile {
         if let Some(ref hsl) = profile.hsl_adjustments {
             if hsl.has_adjustments() {
@@ -963,7 +953,151 @@ fn compute_auto_levels_gains(
     (gains, offsets)
 }
 
-/// Compute auto-color gains from histogram
+/// Limit how much gains can diverge from each other to preserve scene character.
+/// Mirrors the CPU implementation in auto_adjust.rs.
+fn limit_channel_divergence(gains: [f32; 3], max_divergence: f32) -> [f32; 3] {
+    let min_g = gains[0].min(gains[1]).min(gains[2]);
+    let max_g = gains[0].max(gains[1]).max(gains[2]);
+    let current_divergence = max_g - min_g;
+
+    if current_divergence <= max_divergence {
+        return gains; // Already within limits
+    }
+
+    // Scale gains toward their mean to reduce divergence while preserving relative proportions
+    let mean_gain = (gains[0] + gains[1] + gains[2]) / 3.0;
+    let scale = max_divergence / current_divergence;
+
+    [
+        mean_gain + (gains[0] - mean_gain) * scale,
+        mean_gain + (gains[1] - mean_gain) * scale,
+        mean_gain + (gains[2] - mean_gain) * scale,
+    ]
+}
+
+/// Compute scene-adaptive auto-color gains using midtone-weighted means.
+///
+/// Uses a Gaussian weighting centered on midtones (luminance ~0.5) to compute
+/// weighted channel averages. This ensures the color correction prioritizes
+/// midtone neutrality, which is what the human eye is most sensitive to.
+fn compute_auto_color_gains_fullimage(
+    image: &GpuImage,
+    _ctx: &GpuContext,
+    options: &ConvertOptions,
+) -> Result<[f32; 3], GpuError> {
+    // Download image and compute midtone-weighted channel means
+    let data = image.download()?;
+    let mut r_sum = 0.0f64;
+    let mut g_sum = 0.0f64;
+    let mut b_sum = 0.0f64;
+    let mut weight_sum = 0.0f64;
+
+    for pixel in data.chunks_exact(3) {
+        let r = pixel[0] as f64;
+        let g = pixel[1] as f64;
+        let b = pixel[2] as f64;
+
+        // Compute luminance
+        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // Gaussian weight centered at 0.5 with sigma ~0.25
+        // This gives high weight to midtones, low weight to shadows/highlights
+        let dist = lum - 0.5;
+        let weight = (-dist * dist / (2.0 * 0.25 * 0.25)).exp();
+
+        r_sum += r * weight;
+        g_sum += g * weight;
+        b_sum += b * weight;
+        weight_sum += weight;
+    }
+
+    if weight_sum < 0.001 {
+        return Ok([1.0, 1.0, 1.0]);
+    }
+
+    let avg_r = (r_sum / weight_sum) as f32;
+    let avg_g = (g_sum / weight_sum) as f32;
+    let avg_b = (b_sum / weight_sum) as f32;
+
+    eprintln!(
+        "[AUTO-COLOR] Midtone-weighted avgs: R={:.4} G={:.4} B={:.4}",
+        avg_r, avg_g, avg_b
+    );
+    eprintln!(
+        "[AUTO-COLOR] Ratios: R/G={:.4} B/G={:.4}",
+        avg_r / avg_g,
+        avg_b / avg_g
+    );
+
+    let strength = options.auto_color_strength;
+    let min_gain = options.auto_color_min_gain;
+    let max_gain = options.auto_color_max_gain;
+
+    // Asymmetric color correction:
+    // - Warmth (R > G) is often natural scene character - preserve it
+    // - Coolness/blue cast (B > G) is often a scanning artifact - correct it
+    //
+    // Instead of targeting neutral R=G=B, we use G as reference and:
+    // - Only reduce R if it's significantly above G (which is rare for natural scenes)
+    // - Reduce B toward G when B > G (remove blue cast)
+    // - Boost R/B toward G when they're below G (remove cyan/yellow casts)
+
+    // Calculate what gain would make each channel equal to G
+    let r_to_neutral = avg_g / avg_r.max(0.001);
+    let b_to_neutral = avg_g / avg_b.max(0.001);
+
+    // For R channel: if R > G (warm), boost warmth for film look
+    // If R < G (cyan cast), use full strength to correct
+    let r_is_warm = avg_r > avg_g;
+    let r_gain = if r_is_warm {
+        // Warm scene: boost warmth significantly for pleasing film look
+        // Film inversions typically lose warmth - compensate with ~12% boost
+        // This mimics the warmer tones of professional scanner output
+        1.12 // 12% boost when scene is warm
+    } else {
+        // Cyan cast: boost R toward G
+        1.0 + strength * (r_to_neutral - 1.0)
+    };
+
+    // For B channel: if B > G (blue cast), use full strength to correct
+    // If B < G (yellow cast, rare), use reduced strength
+    let b_is_blue = avg_b > avg_g;
+    let b_strength = if b_is_blue { strength } else { strength * 0.3 };
+    let b_gain = 1.0 + b_strength * (b_to_neutral - 1.0);
+
+    eprintln!(
+        "[AUTO-COLOR] r_is_warm={} (preserving) b_is_blue={} (correcting)",
+        r_is_warm, b_is_blue
+    );
+    eprintln!("[AUTO-COLOR] b_strength={:.3}", b_strength);
+
+    let gains = [
+        r_gain.clamp(min_gain, max_gain),
+        1.0, // G is reference, no adjustment
+        b_gain.clamp(min_gain, max_gain),
+    ];
+
+    eprintln!(
+        "[AUTO-COLOR] raw gains: R={:.4} G={:.4} B={:.4}",
+        gains[0], gains[1], gains[2]
+    );
+
+    // Limit divergence to preserve scene character
+    let final_gains = limit_channel_divergence(gains, options.auto_color_max_divergence);
+    eprintln!(
+        "[AUTO-COLOR] final gains (after divergence limit): R={:.4} G={:.4} B={:.4}",
+        final_gains[0], final_gains[1], final_gains[2]
+    );
+
+    Ok(final_gains)
+}
+
+/// Compute scene-adaptive auto-color gains from histogram.
+///
+/// Uses the same algorithm as the CPU implementation:
+/// - Scene-adaptive targeting (preserves scene warmth/coolness)
+/// - Channel divergence limiting to prevent aggressive neutralization
+#[allow(dead_code)]
 fn compute_auto_color_gains(
     hist_r: &[u32],
     hist_g: &[u32],
@@ -997,20 +1131,59 @@ fn compute_auto_color_gains(
         }
     }
 
-    let avg_r = compute_weighted_average(hist_r, 0.35, 0.65);
-    let avg_g = compute_weighted_average(hist_g, 0.35, 0.65);
-    let avg_b = compute_weighted_average(hist_b, 0.35, 0.65);
+    // Use wider range (0.1-0.9) to capture more representative sample
+    // The narrow midtone range (0.35-0.65) can miss highlights/shadows that
+    // have different color distributions
+    let avg_r = compute_weighted_average(hist_r, 0.1, 0.9);
+    let avg_g = compute_weighted_average(hist_g, 0.1, 0.9);
+    let avg_b = compute_weighted_average(hist_b, 0.1, 0.9);
 
-    let target = (avg_r + avg_g + avg_b) / 3.0;
+    eprintln!(
+        "[GPU AUTO-COLOR] Wide range avgs: R={:.4} G={:.4} B={:.4}",
+        avg_r, avg_g, avg_b
+    );
+
+    // Scene-adaptive targeting: blend between scene-preserving and neutral
+    let avg_luminance = (avg_r + avg_g + avg_b) / 3.0;
+    let strength = options.auto_color_strength;
+
+    eprintln!(
+        "[GPU AUTO-COLOR] avg_luminance={:.4} strength={:.4}",
+        avg_luminance, strength
+    );
+
+    // Target values that respect scene color temperature
+    // At strength=1.0, we target neutral; at strength=0.0, we preserve scene completely
+    let target_r = avg_r + strength * (avg_luminance - avg_r);
+    let target_g = avg_g + strength * (avg_luminance - avg_g);
+    let target_b = avg_b + strength * (avg_luminance - avg_b);
+
+    eprintln!(
+        "[GPU AUTO-COLOR] targets: R={:.4} G={:.4} B={:.4}",
+        target_r, target_g, target_b
+    );
 
     let min_gain = options.auto_color_min_gain;
     let max_gain = options.auto_color_max_gain;
 
-    [
-        (target / avg_r.max(0.001)).clamp(min_gain, max_gain),
-        (target / avg_g.max(0.001)).clamp(min_gain, max_gain),
-        (target / avg_b.max(0.001)).clamp(min_gain, max_gain),
-    ]
+    // Calculate gains with per-channel limits
+    let gains = [
+        (target_r / avg_r.max(0.001)).clamp(min_gain, max_gain),
+        (target_g / avg_g.max(0.001)).clamp(min_gain, max_gain),
+        (target_b / avg_b.max(0.001)).clamp(min_gain, max_gain),
+    ];
+
+    eprintln!(
+        "[GPU AUTO-COLOR] raw gains: R={:.4} G={:.4} B={:.4}",
+        gains[0], gains[1], gains[2]
+    );
+    eprintln!(
+        "[GPU AUTO-COLOR] max_divergence={:.4}",
+        options.auto_color_max_divergence
+    );
+
+    // Limit divergence to preserve scene character
+    limit_channel_divergence(gains, options.auto_color_max_divergence)
 }
 
 /// Compute white balance gains (requires downloading image data)

@@ -245,6 +245,7 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
         auto_color_strength: 0.5,
         auto_color_min_gain: 0.8,
         auto_color_max_gain: 1.5,
+        auto_color_max_divergence: 0.15,
         base_brightest_percent: 15.0,
         base_sampling_mode: BaseSamplingMode::Median,
         base_estimation_method: BaseEstimationMethod::Regions,
@@ -261,7 +262,15 @@ fn create_test_options(use_gpu: bool) -> crate::models::ConvertOptions {
         no_clip: true, // Preserve full range for comparison
         enable_auto_wb: false,
         auto_wb_strength: 0.5,
+        auto_wb_mode: AutoWbMode::default(),
         use_gpu,
+        pipeline_mode: PipelineMode::default(),
+        density_balance: None,
+        neutral_point: None,
+        density_balance_red: None,
+        density_balance_blue: None,
+        tone_curve_override: None,
+        cb_options: None,
     }
 }
 

@@ -2,11 +2,11 @@
 //!
 //! Run with: cargo bench -p invers-core
 
-use std::collections::HashMap;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use invers_core::auto_adjust::{auto_color, auto_levels, auto_levels_no_clip, compress_highlights};
 use invers_core::models::ToneCurveParams;
 use invers_core::pipeline::{apply_color_matrix, apply_tone_curve};
+use std::collections::HashMap;
 
 /// Generate synthetic test image data (positive image)
 fn generate_test_positive(width: u32, height: u32) -> Vec<f32> {
@@ -67,11 +67,7 @@ fn bench_color_matrix(c: &mut Criterion) {
     let mut group = c.benchmark_group("color_matrix");
 
     // Typical color correction matrix
-    let matrix = [
-        [1.2, -0.1, -0.1],
-        [-0.1, 1.2, -0.1],
-        [-0.1, -0.1, 1.2],
-    ];
+    let matrix = [[1.2, -0.1, -0.1], [-0.1, 1.2, -0.1], [-0.1, -0.1, 1.2]];
 
     for size in [256, 512, 1024, 2048].iter() {
         let width = *size;
@@ -134,7 +130,7 @@ fn bench_auto_levels(c: &mut Criterion) {
             |b, &(w, h)| {
                 let mut data = generate_test_positive(w, h);
                 b.iter(|| {
-                    let _ = auto_color(black_box(&mut data), 3, 1.0, 0.5, 2.0);
+                    let _ = auto_color(black_box(&mut data), 3, 1.0, 0.5, 2.0, 0.15);
                 });
             },
         );

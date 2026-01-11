@@ -51,9 +51,8 @@ pub fn decode_image<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     match extension.as_str() {
         "tif" | "tiff" => decode_tiff(path),
         "png" => decode_png(path),
-        // RAW formats (via rsraw/LibRaw)
-        "cr2" | "cr3" | "nef" | "nrw" | "arw" | "raf" | "rw2" | "orf" | "pef" | "dng" | "3fr"
-        | "fff" | "iiq" | "rwl" | "raw" => decode_raw(path),
+        // RAW formats (via invers-raw/LibRaw)
+        ext if invers_raw::is_raw_extension(ext) => decode_raw(path),
         _ => Err(format!("Unsupported file format: {}", extension)),
     }
 }
@@ -150,27 +149,30 @@ fn decode_tiff<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     let source_is_grayscale = matches!(color_type, tiff::ColorType::Gray(_));
 
     // Convert to f32 linear RGB based on bit depth and color type
+    // Uses generic decode_tiff_buffer for all numeric types
     let (data, channels) = match image_data {
-        tiff::decoder::DecodingResult::U8(buf) => decode_tiff_u8(&buf, width, height, color_type)?,
+        tiff::decoder::DecodingResult::U8(buf) => {
+            decode_tiff_buffer(&buf, width, height, color_type)?
+        }
         tiff::decoder::DecodingResult::U16(buf) => {
-            decode_tiff_u16(&buf, width, height, color_type)?
+            decode_tiff_buffer(&buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::U32(buf) => {
-            decode_tiff_u32(&buf, width, height, color_type)?
+            decode_tiff_buffer(&buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::U64(buf) => {
-            decode_tiff_u64(&buf, width, height, color_type)?
+            decode_tiff_buffer(&buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::F32(buf) => {
-            decode_tiff_f32(&buf, width, height, color_type)?
+            decode_tiff_buffer(&buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::F64(buf) => {
-            decode_tiff_f64(&buf, width, height, color_type)?
+            decode_tiff_buffer(&buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::F16(buf) => {
-            // Convert f16 to f32
+            // Convert f16 to f32 first, then use generic decoder
             let f32_buf: Vec<f32> = buf.iter().map(|&v| v.to_f32()).collect();
-            decode_tiff_f32(&f32_buf, width, height, color_type)?
+            decode_tiff_buffer(&f32_buf, width, height, color_type)?
         }
         tiff::decoder::DecodingResult::I8(_)
         | tiff::decoder::DecodingResult::I16(_)
@@ -196,9 +198,61 @@ fn decode_tiff<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
     })
 }
 
-/// Decode u8 TIFF data to f32 linear RGB with pre-allocation
-fn decode_tiff_u8(
-    buf: &[u8],
+// =============================================================================
+// Generic TIFF value trait and decoder to eliminate code duplication
+// =============================================================================
+
+/// Trait for TIFF sample types that can be normalized to f32
+trait TiffValue: Copy {
+    /// Normalize this value to f32 in range [0.0, 1.0]
+    fn to_normalized_f32(self) -> f32;
+}
+
+impl TiffValue for u8 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self as f32 / 255.0
+    }
+}
+
+impl TiffValue for u16 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self as f32 / 65535.0
+    }
+}
+
+impl TiffValue for u32 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self as f32 / u32::MAX as f32
+    }
+}
+
+impl TiffValue for u64 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self as f32 / u64::MAX as f32
+    }
+}
+
+impl TiffValue for f32 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self
+    }
+}
+
+impl TiffValue for f64 {
+    #[inline]
+    fn to_normalized_f32(self) -> f32 {
+        self as f32
+    }
+}
+
+/// Generic TIFF buffer decoder - handles all numeric types
+fn decode_tiff_buffer<T: TiffValue>(
+    buf: &[T],
     width: u32,
     height: u32,
     color_type: tiff::ColorType,
@@ -222,250 +276,33 @@ fn decode_tiff_u8(
         ));
     }
 
-    // Convert u8 to f32 linear with pre-allocation
-    // For negatives, simple normalization to 0-1 is fine
-    if channels == 1 {
-        // Grayscale: expand to RGB with pre-allocation
-        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-        for &gray_u8 in buf {
-            let gray = gray_u8 as f32 / 255.0;
-            rgb_data.push(gray);
-            rgb_data.push(gray);
-            rgb_data.push(gray);
+    match channels {
+        1 => {
+            // Grayscale: expand to RGB with pre-allocation
+            let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+            for &val in buf {
+                let gray = val.to_normalized_f32();
+                rgb_data.push(gray);
+                rgb_data.push(gray);
+                rgb_data.push(gray);
+            }
+            Ok((rgb_data, 3))
         }
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        // RGBA: drop alpha channel with pre-allocation
-        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-        for rgba in buf.chunks_exact(4) {
-            rgb_data.push(rgba[0] as f32 / 255.0);
-            rgb_data.push(rgba[1] as f32 / 255.0);
-            rgb_data.push(rgba[2] as f32 / 255.0);
+        4 => {
+            // RGBA: drop alpha channel with pre-allocation
+            let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+            for rgba in buf.chunks_exact(4) {
+                rgb_data.push(rgba[0].to_normalized_f32());
+                rgb_data.push(rgba[1].to_normalized_f32());
+                rgb_data.push(rgba[2].to_normalized_f32());
+            }
+            Ok((rgb_data, 3))
         }
-        Ok((rgb_data, 3))
-    } else {
-        // RGB: direct conversion with pre-allocation
-        let data: Vec<f32> = buf.iter().map(|&v| v as f32 / 255.0).collect();
-        Ok((data, channels))
-    }
-}
-
-/// Decode u16 TIFF data to f32 linear RGB with pre-allocation
-fn decode_tiff_u16(
-    buf: &[u16],
-    width: u32,
-    height: u32,
-    color_type: tiff::ColorType,
-) -> Result<(Vec<f32>, u8), String> {
-    let channels = match color_type {
-        tiff::ColorType::Gray(_) => 1,
-        tiff::ColorType::RGB(_) => 3,
-        tiff::ColorType::RGBA(_) => 4,
-        tiff::ColorType::CMYK(_) => return Err("CMYK color type not supported".to_string()),
-        tiff::ColorType::YCbCr(_) => return Err("YCbCr color type not supported yet".to_string()),
-        tiff::ColorType::Palette(_) => return Err("Palette color type not supported".to_string()),
-        _ => return Err(format!("Unknown TIFF color type: {:?}", color_type)),
-    };
-
-    let expected_len = (width * height * channels as u32) as usize;
-    if buf.len() != expected_len {
-        return Err(format!(
-            "TIFF buffer size mismatch: expected {}, got {}",
-            expected_len,
-            buf.len()
-        ));
-    }
-
-    // Convert u16 to f32 linear (16-bit is typically already linear)
-    if channels == 1 {
-        // Grayscale: expand to RGB with pre-allocation
-        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-        for &gray_u16 in buf {
-            let gray = gray_u16 as f32 / 65535.0;
-            rgb_data.push(gray);
-            rgb_data.push(gray);
-            rgb_data.push(gray);
-        }
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        // RGBA: drop alpha channel with pre-allocation
-        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-        for rgba in buf.chunks_exact(4) {
-            rgb_data.push(rgba[0] as f32 / 65535.0);
-            rgb_data.push(rgba[1] as f32 / 65535.0);
-            rgb_data.push(rgba[2] as f32 / 65535.0);
-        }
-        Ok((rgb_data, 3))
-    } else {
-        // RGB: direct conversion
-        let data: Vec<f32> = buf.iter().map(|&v| v as f32 / 65535.0).collect();
-        Ok((data, channels))
-    }
-}
-
-/// Decode u32 TIFF data to f32 linear RGB
-fn decode_tiff_u32(
-    buf: &[u32],
-    width: u32,
-    height: u32,
-    color_type: tiff::ColorType,
-) -> Result<(Vec<f32>, u8), String> {
-    let channels = match color_type {
-        tiff::ColorType::Gray(_) => 1,
-        tiff::ColorType::RGB(_) => 3,
-        tiff::ColorType::RGBA(_) => 4,
         _ => {
-            return Err(format!(
-                "Unsupported TIFF color type for u32: {:?}",
-                color_type
-            ))
+            // RGB: direct conversion
+            let data: Vec<f32> = buf.iter().map(|&v| v.to_normalized_f32()).collect();
+            Ok((data, channels))
         }
-    };
-
-    let expected_len = (width * height * channels as u32) as usize;
-    if buf.len() != expected_len {
-        return Err(format!(
-            "TIFF buffer size mismatch: expected {}, got {}",
-            expected_len,
-            buf.len()
-        ));
-    }
-
-    // Convert u32 to f32 linear
-    let data: Vec<f32> = buf.iter().map(|&v| v as f32 / u32::MAX as f32).collect();
-
-    // Handle grayscale and RGBA like u16
-    if channels == 1 {
-        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        let rgb_data: Vec<f32> = data
-            .chunks_exact(4)
-            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
-            .collect();
-        Ok((rgb_data, 3))
-    } else {
-        Ok((data, channels))
-    }
-}
-
-/// Decode u64 TIFF data to f32 linear RGB
-fn decode_tiff_u64(
-    buf: &[u64],
-    width: u32,
-    height: u32,
-    color_type: tiff::ColorType,
-) -> Result<(Vec<f32>, u8), String> {
-    let channels = match color_type {
-        tiff::ColorType::Gray(_) => 1,
-        tiff::ColorType::RGB(_) => 3,
-        tiff::ColorType::RGBA(_) => 4,
-        _ => return Err(format!("Unsupported color type for u64: {:?}", color_type)),
-    };
-
-    let expected_len = (width * height * channels as u32) as usize;
-    if buf.len() != expected_len {
-        return Err(format!(
-            "TIFF buffer size mismatch: expected {}, got {}",
-            expected_len,
-            buf.len()
-        ));
-    }
-
-    // Convert u64 to f32 linear (with potential precision loss)
-    let data: Vec<f32> = buf.iter().map(|&v| v as f32 / u64::MAX as f32).collect();
-
-    if channels == 1 {
-        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        let rgb_data: Vec<f32> = data
-            .chunks_exact(4)
-            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
-            .collect();
-        Ok((rgb_data, 3))
-    } else {
-        Ok((data, channels))
-    }
-}
-
-/// Decode f32 TIFF data to f32 linear RGB
-fn decode_tiff_f32(
-    buf: &[f32],
-    width: u32,
-    height: u32,
-    color_type: tiff::ColorType,
-) -> Result<(Vec<f32>, u8), String> {
-    let channels = match color_type {
-        tiff::ColorType::Gray(_) => 1,
-        tiff::ColorType::RGB(_) => 3,
-        tiff::ColorType::RGBA(_) => 4,
-        _ => return Err(format!("Unsupported color type for f32: {:?}", color_type)),
-    };
-
-    let expected_len = (width * height * channels as u32) as usize;
-    if buf.len() != expected_len {
-        return Err(format!(
-            "TIFF buffer size mismatch: expected {}, got {}",
-            expected_len,
-            buf.len()
-        ));
-    }
-
-    // Already f32, just clone
-    let data = buf.to_vec();
-
-    if channels == 1 {
-        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        let rgb_data: Vec<f32> = data
-            .chunks_exact(4)
-            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
-            .collect();
-        Ok((rgb_data, 3))
-    } else {
-        Ok((data, channels))
-    }
-}
-
-/// Decode f64 TIFF data to f32 linear RGB
-fn decode_tiff_f64(
-    buf: &[f64],
-    width: u32,
-    height: u32,
-    color_type: tiff::ColorType,
-) -> Result<(Vec<f32>, u8), String> {
-    let channels = match color_type {
-        tiff::ColorType::Gray(_) => 1,
-        tiff::ColorType::RGB(_) => 3,
-        tiff::ColorType::RGBA(_) => 4,
-        _ => return Err(format!("Unsupported color type for f64: {:?}", color_type)),
-    };
-
-    let expected_len = (width * height * channels as u32) as usize;
-    if buf.len() != expected_len {
-        return Err(format!(
-            "TIFF buffer size mismatch: expected {}, got {}",
-            expected_len,
-            buf.len()
-        ));
-    }
-
-    // Convert f64 to f32
-    let data: Vec<f32> = buf.iter().map(|&v| v as f32).collect();
-
-    if channels == 1 {
-        let rgb_data: Vec<f32> = data.iter().flat_map(|&gray| [gray, gray, gray]).collect();
-        Ok((rgb_data, 3))
-    } else if channels == 4 {
-        let rgb_data: Vec<f32> = data
-            .chunks_exact(4)
-            .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]])
-            .collect();
-        Ok((rgb_data, 3))
-    } else {
-        Ok((data, channels))
     }
 }
 
@@ -687,125 +524,23 @@ fn decode_png_rgba16(bytes: &[u8], width: u32, height: u32) -> Result<(Vec<f32>,
     Ok((rgb_data, 3))
 }
 
-/// Decode a RAW file using rsraw (LibRaw wrapper)
+/// Decode a RAW file using invers-raw (LibRaw wrapper)
 fn decode_raw<P: AsRef<Path>>(path: P) -> Result<DecodedImage, String> {
-    use rsraw::{RawImage, BIT_DEPTH_16};
-    use std::convert::AsMut;
+    let raw = invers_raw::decode_raw(path)?;
 
-    // Read file into buffer
-    let data =
-        std::fs::read(path.as_ref()).map_err(|e| format!("Failed to read RAW file: {}", e))?;
-
-    // Open RAW file
-    let mut raw =
-        RawImage::open(&data).map_err(|e| format!("Failed to open RAW file: {:?}", e))?;
-
-    // Configure LibRaw processing parameters via low-level access
-    // SAFETY: rsraw provides safe AsMut access to libraw_data_t
-    {
-        let libraw_data: &mut rsraw_sys::libraw_data_t = raw.as_mut();
-        // Use AHD demosaic (best quality for film scanning)
-        // 0 = linear, 1 = VNG, 2 = PPG, 3 = AHD
-        libraw_data.params.user_qual = 3;
-        // Disable automatic brightness adjustment (we handle this in pipeline)
-        libraw_data.params.no_auto_bright = 1;
-        // Use camera white balance if available
-        libraw_data.params.use_camera_wb = 1;
-    }
-
-    // Unpack the RAW data (modifies raw in place)
-    raw.unpack()
-        .map_err(|e| format!("Failed to unpack RAW data: {:?}", e))?;
-
-    // Process to 16-bit output (best quality for film scanning)
-    let processed = raw
-        .process::<BIT_DEPTH_16>()
-        .map_err(|e| format!("Failed to process RAW: {:?}", e))?;
-
-    let width = processed.width();
-    let height = processed.height();
-    let channels = processed.colors() as u8;
-
-    // Get raw pixel data (ProcessedImage<BIT_DEPTH_16> derefs to &[u16])
-    let pixel_data: &[u16] = &processed;
-    let data = convert_raw_u16_to_f32_rgb(pixel_data, width, height, channels)?;
-
-    let is_monochrome = detect_monochrome(&data, width, height);
+    let is_monochrome = detect_monochrome(&raw.data, raw.width, raw.height);
 
     Ok(DecodedImage {
-        width,
-        height,
-        data,
-        channels: 3,
-        // rsraw's high-level API doesn't expose black/white levels or color matrices
-        // These would need to be accessed via rsraw-sys for low-level LibRaw access
-        black_level: None,
-        white_level: None,
-        color_matrix: None,
+        width: raw.width,
+        height: raw.height,
+        data: raw.data,
+        channels: raw.channels,
+        black_level: raw.black_level,
+        white_level: raw.white_level,
+        color_matrix: raw.color_matrix,
         source_is_grayscale: false,
         is_monochrome,
     })
-}
-
-/// Convert RAW pixel data (16-bit u16 slice) to f32 linear RGB (0.0-1.0)
-/// Uses parallel processing via rayon for large images
-fn convert_raw_u16_to_f32_rgb(
-    pixel_data: &[u16],
-    width: u32,
-    height: u32,
-    channels: u8,
-) -> Result<Vec<f32>, String> {
-    use rayon::prelude::*;
-
-    let pixel_count = (width * height) as usize;
-    let expected_len = pixel_count * channels as usize;
-
-    if pixel_data.len() < expected_len {
-        return Err(format!(
-            "RAW buffer size mismatch: expected at least {}, got {}",
-            expected_len,
-            pixel_data.len()
-        ));
-    }
-
-    let rgb_data = if channels == 3 {
-        // RGB data: 3 u16 values per pixel - parallel conversion
-        pixel_data[..expected_len]
-            .par_chunks_exact(3)
-            .flat_map(|pixel| {
-                [
-                    pixel[0] as f32 / 65535.0,
-                    pixel[1] as f32 / 65535.0,
-                    pixel[2] as f32 / 65535.0,
-                ]
-            })
-            .collect()
-    } else if channels == 4 {
-        // RGBA data: drop alpha channel - parallel conversion
-        pixel_data[..pixel_count * 4]
-            .par_chunks_exact(4)
-            .flat_map(|pixel| {
-                [
-                    pixel[0] as f32 / 65535.0,
-                    pixel[1] as f32 / 65535.0,
-                    pixel[2] as f32 / 65535.0,
-                ]
-            })
-            .collect()
-    } else if channels == 1 {
-        // Grayscale: expand to RGB - parallel conversion
-        pixel_data[..pixel_count]
-            .par_iter()
-            .flat_map(|&gray| {
-                let val = gray as f32 / 65535.0;
-                [val, val, val]
-            })
-            .collect()
-    } else {
-        return Err(format!("Unexpected RAW channel count: {}", channels));
-    };
-
-    Ok(rgb_data)
 }
 
 #[cfg(test)]

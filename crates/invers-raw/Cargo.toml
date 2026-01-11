@@ -1,0 +1,14 @@
+[package]
+name = "invers-raw"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "RAW file decoding for invers using LibRaw"
+
+[dependencies]
+rsraw = "0.1"
+rsraw-sys = "0.1"
+rayon = "1.11.0"
