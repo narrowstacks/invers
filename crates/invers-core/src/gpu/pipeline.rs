@@ -129,7 +129,14 @@ fn execute_pipeline(
         apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
     }
 
-    // Stage 8: Auto-exposure (if enabled)
+    // Stage 8: Auto-color (if enabled) - runs before auto-exposure to match CPU pipeline
+    // Uses midtone-weighted means to prioritize neutral midtones
+    if options.enable_auto_color {
+        let color_gains = compute_auto_color_gains_fullimage(image, ctx, options)?;
+        apply_gains(ctx, image, color_gains, [0.0, 0.0, 0.0], pixel_count)?;
+    }
+
+    // Stage 9: Auto-exposure (if enabled)
     if options.enable_auto_exposure {
         let exposure_gain = compute_exposure_gain_cpu(image, ctx, options)?;
         let strength = options.auto_exposure_strength;
@@ -140,13 +147,6 @@ fn execute_pipeline(
     // Stage 10: Manual exposure compensation
     if options.exposure_compensation != 1.0 {
         apply_exposure(ctx, image, options.exposure_compensation, 1.0, pixel_count)?;
-    }
-
-    // Stage 11: Auto-color (if enabled) - after exposure so it corrects the final tonal distribution
-    // Uses midtone-weighted means to prioritize neutral midtones
-    if options.enable_auto_color {
-        let color_gains = compute_auto_color_gains_fullimage(image, ctx, options)?;
-        apply_gains(ctx, image, color_gains, [0.0, 0.0, 0.0], pixel_count)?;
     }
 
     // Stage 12: Color matrix (if film preset has one)
@@ -1050,10 +1050,11 @@ fn compute_auto_color_gains_fullimage(
     // If R < G (cyan cast), use full strength to correct
     let r_is_warm = avg_r > avg_g;
     let r_gain = if r_is_warm {
-        // Warm scene: boost warmth significantly for pleasing film look
-        // Film inversions typically lose warmth - compensate with ~12% boost
+        // Warm scene: boost warmth for pleasing film look, scaled by strength
+        // Film inversions typically lose warmth - compensate with up to ~12% boost
         // This mimics the warmer tones of professional scanner output
-        1.12 // 12% boost when scene is warm
+        // At strength=0, no change (1.0); at strength=1.0, full boost (1.12)
+        1.0 + strength * 0.12
     } else {
         // Cyan cast: boost R toward G
         1.0 + strength * (r_to_neutral - 1.0)
