@@ -1,3 +1,18 @@
+//! Invers CLI - Film negative to positive converter
+//!
+//! This is the command-line interface for the Invers film conversion tool.
+//! It provides commands for:
+//!
+//! - `convert`: Convert a single negative image to positive
+//! - `batch`: Process multiple images with shared settings
+//! - `analyze`: Analyze an image to estimate film base color
+//! - `preset`: Manage film presets (list, show, create)
+//! - `init`: Initialize user configuration directory
+//!
+//! Debug-only commands (available in debug builds):
+//! - `diagnose`: Compare conversion against third-party software
+//! - `test-params`: Optimize parameters against a reference
+
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 

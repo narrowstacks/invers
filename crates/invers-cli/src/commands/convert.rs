@@ -3,6 +3,21 @@ use std::time::Instant;
 
 use invers_cli::{determine_output_path, parse_base_rgb, process_single_image, ProcessingParams};
 
+/// Execute the convert command for a single image.
+///
+/// Converts a film negative image to a positive, applying the full processing
+/// pipeline including base estimation, inversion, tone curves, and color correction.
+///
+/// The function handles:
+/// - Image decoding (TIFF, PNG, RAW formats)
+/// - Automatic or manual base estimation
+/// - B&W auto-detection (switches to BlackAndWhite inversion mode)
+/// - Pipeline mode selection (Legacy, Research, or CB)
+/// - Film preset and scan profile application
+/// - Export to TIFF16 or Linear DNG
+///
+/// # Returns
+/// Returns `Ok(())` on success, or an error message describing the failure.
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_variables)] // Some params only used in debug builds
 pub fn cmd_convert(

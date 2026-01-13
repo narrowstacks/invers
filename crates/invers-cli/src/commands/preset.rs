@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+/// List available film presets in the specified or default directory.
 pub fn cmd_preset_list(dir: Option<PathBuf>) -> Result<(), String> {
     let dir = dir.unwrap_or_else(|| {
         invers_core::presets::get_presets_dir().unwrap_or_else(|_| PathBuf::from("profiles/film"))
@@ -21,6 +22,7 @@ pub fn cmd_preset_list(dir: Option<PathBuf>) -> Result<(), String> {
     }
 }
 
+/// Display details of a film preset (base offsets, tone curve, color matrix).
 pub fn cmd_preset_show(preset: String) -> Result<(), String> {
     println!("Loading preset: {}", preset);
 
@@ -61,6 +63,7 @@ pub fn cmd_preset_show(preset: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Create a new film preset template file with default values.
 pub fn cmd_preset_create(output: PathBuf, name: String) -> Result<(), String> {
     println!("Creating new preset: {}", name);
 

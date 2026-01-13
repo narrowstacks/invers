@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use invers_cli::parse_roi;
 
-/// Analysis result structure for JSON output
+/// Analysis result structure for JSON output.
+///
+/// Contains all metadata and analysis results for a single image,
+/// serializable to JSON for machine-readable output.
 #[derive(Serialize)]
 pub struct AnalysisResult {
     pub file: String,
@@ -13,6 +16,7 @@ pub struct AnalysisResult {
     pub channel_stats: ChannelStats,
 }
 
+/// Film base estimation result for JSON output.
 #[derive(Serialize)]
 pub struct BaseEstimationResult {
     pub method: String,
@@ -23,6 +27,7 @@ pub struct BaseEstimationResult {
     pub roi: Option<(u32, u32, u32, u32)>,
 }
 
+/// Per-channel (RGB) statistics for an image.
 #[derive(Serialize)]
 pub struct ChannelStats {
     pub red: ChannelStat,
@@ -30,6 +35,7 @@ pub struct ChannelStats {
     pub blue: ChannelStat,
 }
 
+/// Statistics for a single color channel.
 #[derive(Serialize)]
 pub struct ChannelStat {
     pub min: f32,
@@ -37,6 +43,7 @@ pub struct ChannelStat {
     pub mean: f32,
 }
 
+/// Compute min, max, and mean for each RGB channel in a decoded image.
 pub fn compute_channel_stats(decoded: &invers_core::decoders::DecodedImage) -> ChannelStats {
     let pixels = &decoded.data;
     let channels = decoded.channels as usize;
@@ -92,6 +99,11 @@ pub fn compute_channel_stats(decoded: &invers_core::decoders::DecodedImage) -> C
     }
 }
 
+/// Execute the analyze command to inspect an image and estimate film base color.
+///
+/// Analyzes a negative image to determine base RGB values that can be reused
+/// across multiple frames from the same roll of film. Output can be displayed
+/// as human-readable text or saved as JSON for batch processing.
 pub fn cmd_analyze(
     input: PathBuf,
     roi: Option<String>,

@@ -22,6 +22,20 @@ enum BaseStrategy {
     PerImage,
 }
 
+/// Execute the batch processing command.
+///
+/// Processes multiple negative images with shared settings, optionally using
+/// a common base estimation across all files (same-roll mode).
+///
+/// # Base Estimation Priority
+/// 1. `--base-from`: Load from JSON file (highest priority)
+/// 2. `--base`: Manual RGB values from command line
+/// 3. First-image estimation (default): Share base from first image
+/// 4. `--per-image`: Estimate each image independently (opt-in)
+///
+/// # Returns
+/// Returns `Ok(())` if all files processed successfully, or an error message
+/// indicating how many files failed.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_batch(
     inputs: Vec<PathBuf>,

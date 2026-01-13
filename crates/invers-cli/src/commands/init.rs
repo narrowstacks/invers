@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+/// Initialize user configuration directory with default presets.
+///
+/// Copies default configuration and preset files from the Homebrew share
+/// directory to `~/invers/`. Safe to run multiple times - won't overwrite
+/// existing files unless `force` is true.
 pub fn cmd_init(force: bool) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "Could not determine home directory")?;
     let invers_dir = PathBuf::from(&home).join("invers");
@@ -71,6 +76,7 @@ pub fn cmd_init(force: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Recursively copy directory contents, skipping existing files unless forced.
 fn copy_dir_contents(
     src: &std::path::Path,
     dst: &std::path::Path,
