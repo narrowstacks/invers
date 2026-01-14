@@ -92,6 +92,10 @@ pub fn analyze_histogram(
     white_threshold: f32,
     black_threshold: f32,
 ) -> CbHistogramAnalysis {
+    if white_threshold <= 0.0 && black_threshold <= 0.0 {
+        return analyze_histogram_no_clip(data, channels);
+    }
+
     let total_pixels = (data.len() / channels as usize) as u32;
 
     let r_hist = compute_channel_histogram(data, 0, channels);
@@ -119,6 +123,98 @@ pub fn analyze_histogram(
         blue: CbChannelOrigins {
             white_point: b_white,
             black_point: b_black,
+            mean_point: b_mean,
+        },
+    }
+}
+
+fn analyze_histogram_no_clip(data: &[f32], channels: u8) -> CbHistogramAnalysis {
+    let ch = channels as usize;
+    let mut r_min = f32::INFINITY;
+    let mut r_max = f32::NEG_INFINITY;
+    let mut g_min = f32::INFINITY;
+    let mut g_max = f32::NEG_INFINITY;
+    let mut b_min = f32::INFINITY;
+    let mut b_max = f32::NEG_INFINITY;
+    let mut r_sum = 0.0f64;
+    let mut g_sum = 0.0f64;
+    let mut b_sum = 0.0f64;
+    let mut count = 0u32;
+
+    for pixel in data.chunks_exact(ch) {
+        let r = pixel[0];
+        let g = pixel[1];
+        let b = pixel[2];
+        r_min = r_min.min(r);
+        r_max = r_max.max(r);
+        g_min = g_min.min(g);
+        g_max = g_max.max(g);
+        b_min = b_min.min(b);
+        b_max = b_max.max(b);
+        r_sum += r as f64;
+        g_sum += g as f64;
+        b_sum += b as f64;
+        count += 1;
+    }
+
+    if count == 0 {
+        return CbHistogramAnalysis {
+            red: CbChannelOrigins {
+                white_point: 255.0,
+                black_point: 0.0,
+                mean_point: 0.5,
+            },
+            green: CbChannelOrigins {
+                white_point: 255.0,
+                black_point: 0.0,
+                mean_point: 0.5,
+            },
+            blue: CbChannelOrigins {
+                white_point: 255.0,
+                black_point: 0.0,
+                mean_point: 0.5,
+            },
+        };
+    }
+
+    let r_avg = (r_sum / count as f64) as f32;
+    let g_avg = (g_sum / count as f64) as f32;
+    let b_avg = (b_sum / count as f64) as f32;
+
+    let r_range = (r_max - r_min).abs();
+    let g_range = (g_max - g_min).abs();
+    let b_range = (b_max - b_min).abs();
+
+    let r_mean = if r_range > 0.0001 {
+        ((r_avg - r_min) / r_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let g_mean = if g_range > 0.0001 {
+        ((g_avg - g_min) / g_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let b_mean = if b_range > 0.0001 {
+        ((b_avg - b_min) / b_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+
+    CbHistogramAnalysis {
+        red: CbChannelOrigins {
+            white_point: r_max * 255.0,
+            black_point: r_min * 255.0,
+            mean_point: r_mean,
+        },
+        green: CbChannelOrigins {
+            white_point: g_max * 255.0,
+            black_point: g_min * 255.0,
+            mean_point: g_mean,
+        },
+        blue: CbChannelOrigins {
+            white_point: b_max * 255.0,
+            black_point: b_min * 255.0,
             mean_point: b_mean,
         },
     }

@@ -32,4 +32,4 @@ pub use models::{
 
 // Re-export GPU functions when available
 #[cfg(feature = "gpu")]
-pub use gpu::{gpu_info, is_gpu_available, process_image_gpu};
+pub use gpu::{gpu_info, is_gpu_available, process_image_cb_gpu, process_image_gpu};

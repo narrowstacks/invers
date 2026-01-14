@@ -49,6 +49,7 @@ pub struct GpuPipelines {
     pub inversion_divide: wgpu::ComputePipeline,
     pub inversion_mask_aware: wgpu::ComputePipeline,
     pub inversion_bw: wgpu::ComputePipeline,
+    pub cb_inversion: wgpu::ComputePipeline,
 
     // Tone curve pipelines
     pub tone_curve_scurve: wgpu::ComputePipeline,
@@ -72,6 +73,11 @@ pub struct GpuPipelines {
     pub exposure_multiply: wgpu::ComputePipeline,
     pub shadow_lift: wgpu::ComputePipeline,
     pub highlight_compress: wgpu::ComputePipeline,
+    pub cb_layers: wgpu::ComputePipeline,
+
+    // Subsample for efficient analysis downloads
+    pub subsample: wgpu::ComputePipeline,
+    pub subsample_layout: wgpu::BindGroupLayout,
 }
 
 /// GPU context holding the wgpu device, queue, and pre-compiled pipelines.
@@ -229,6 +235,21 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(Shaders::UTILITY.into()),
         });
 
+        let cb_inversion_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cb_inversion"),
+            source: wgpu::ShaderSource::Wgsl(Shaders::CB_INVERSION.into()),
+        });
+
+        let cb_layers_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cb_layers"),
+            source: wgpu::ShaderSource::Wgsl(Shaders::CB_LAYERS.into()),
+        });
+
+        let subsample_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("subsample"),
+            source: wgpu::ShaderSource::Wgsl(Shaders::SUBSAMPLE.into()),
+        });
+
         // Create pipeline layout for storage buffer + uniform operations
         let storage_uniform_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -370,6 +391,53 @@ impl GpuContext {
                 push_constant_ranges: &[],
             });
 
+        // Create subsample pipeline layout (read-only input, read-write output, uniform params)
+        let subsample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("subsample_layout"),
+            entries: &[
+                // Input pixels (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Output pixels (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Parameters (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let subsample_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("subsample_pipeline_layout"),
+                bind_group_layouts: &[&subsample_layout],
+                push_constant_ranges: &[],
+            });
+
         // Create all compute pipelines
         let inversion_linear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("inversion_linear"),
@@ -413,6 +481,15 @@ impl GpuContext {
             layout: Some(&storage_uniform_pipeline_layout),
             module: &inversion_module,
             entry_point: Some("invert_bw"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let cb_inversion = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("cb_inversion"),
+            layout: Some(&storage_uniform_pipeline_layout),
+            module: &cb_inversion_module,
+            entry_point: Some("invert_cb"),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -536,12 +613,31 @@ impl GpuContext {
             cache: None,
         });
 
+        let cb_layers = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("cb_layers"),
+            layout: Some(&storage_uniform_pipeline_layout),
+            module: &cb_layers_module,
+            entry_point: Some("apply_cb_layers"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let subsample = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("subsample"),
+            layout: Some(&subsample_pipeline_layout),
+            module: &subsample_module,
+            entry_point: Some("subsample"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         Ok(GpuPipelines {
             inversion_linear,
             inversion_log,
             inversion_divide,
             inversion_mask_aware,
             inversion_bw,
+            cb_inversion,
             tone_curve_scurve,
             tone_curve_asymmetric,
             color_matrix,
@@ -555,6 +651,9 @@ impl GpuContext {
             exposure_multiply,
             shadow_lift,
             highlight_compress,
+            cb_layers,
+            subsample,
+            subsample_layout,
         })
     }
 

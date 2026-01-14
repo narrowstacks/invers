@@ -64,7 +64,33 @@ pub fn process_image(
     match options.pipeline_mode {
         PipelineMode::Legacy => process_image_legacy(image, options),
         PipelineMode::Research => process_image_research(image, options),
-        PipelineMode::CbStyle => crate::cb_pipeline::process_image_cb(image, options),
+        PipelineMode::CbStyle => {
+            #[cfg(feature = "gpu")]
+            if options.use_gpu && gpu::is_gpu_available() {
+                if options.debug {
+                    if let Some(info) = gpu::gpu_info() {
+                        eprintln!("[DEBUG] Using GPU acceleration (CB pipeline): {}", info);
+                    }
+                }
+
+                match gpu::process_image_cb_gpu(&image, options) {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] GPU CB processing failed, falling back to CPU: {}",
+                            e
+                        );
+                    }
+                }
+            }
+
+            #[cfg(feature = "gpu")]
+            if options.use_gpu && !gpu::is_gpu_available() && options.debug {
+                eprintln!("[DEBUG] GPU requested but not available, using CPU");
+            }
+
+            crate::cb_pipeline::process_image_cb(image, options)
+        }
     }
 }
 
@@ -721,7 +747,7 @@ fn process_image_research_cpu(
 /// This normalizes the orange mask so that the film base becomes neutral gray.
 /// After this step, the orange mask influence is removed proportionally across
 /// all tonal values (as the mask affects all densities proportionally).
-fn apply_film_base_white_balance(
+pub(crate) fn apply_film_base_white_balance(
     data: &mut [f32],
     base: &BaseEstimation,
     options: &ConvertOptions,

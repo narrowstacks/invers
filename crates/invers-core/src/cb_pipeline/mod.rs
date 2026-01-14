@@ -19,8 +19,8 @@ mod white_balance;
 // Re-export public items
 pub use histogram::analyze_histogram;
 pub use white_balance::{
-    analyze_wb_points, calculate_gamma_balance, calculate_linear_balance,
-    calculate_wb_preset_offsets, AnalyzedWbPoints,
+    analyze_wb_points, calculate_gamma_balance, calculate_linear_balance, calculate_wb_gamma,
+    calculate_wb_offsets, calculate_wb_preset_offsets, AnalyzedWbPoints,
 };
 
 use crate::decoders::DecodedImage;
@@ -33,7 +33,6 @@ use layers::{
     apply_gamma_layer, apply_highlight_toning, apply_highlights_layer, apply_shadow_toning,
     apply_shadows_layer, apply_wb_pixel, apply_whites_layer,
 };
-use white_balance::{calculate_wb_gamma, calculate_wb_offsets};
 
 // ============================================================
 // Math Utilities
@@ -257,15 +256,22 @@ pub fn process_image_cb(
         ));
     }
 
-    // Get base estimation if available
-    let _base_estimation = options.base_estimation.as_ref();
-
     if options.debug {
         eprintln!("[CB] Starting Curves-based pipeline processing");
         eprintln!(
             "[CB] Image size: {}x{}, {} channels",
             width, height, channels
         );
+    }
+
+    // Optional: normalize film base if we have an estimation
+    if let Some(base_estimation) = options.base_estimation.as_ref() {
+        if options.debug {
+            eprintln!("[CB] Applying film base white balance");
+        }
+        crate::pipeline::apply_film_base_white_balance(&mut data, base_estimation, options)?;
+    } else if options.debug {
+        eprintln!("[CB] Film base WB skipped (no base estimation)");
     }
 
     // Step 1: Histogram analysis to find per-channel white/black points
@@ -302,9 +308,7 @@ pub fn process_image_cb(
 
     // Step 2b: Apply Curves-based white balance based on preset selection
     // This analyzes the positive image and applies balance based on the selected preset
-    let apply_wb = cb.wb_preset != CbWbPreset::None || options.enable_auto_wb;
-
-    if apply_wb {
+    if cb.wb_preset != CbWbPreset::None {
         // Analyze the positive image to get WB points (neutral, warm, cool)
         let wb_points = analyze_wb_points(&data, channels);
 
@@ -323,23 +327,14 @@ pub fn process_image_cb(
             );
         }
 
-        // Determine which preset to use
-        let effective_preset = if cb.wb_preset != CbWbPreset::None {
-            cb.wb_preset
-        } else if options.enable_auto_wb {
-            CbWbPreset::AutoColor // Default to AutoColor when --auto-wb is used
-        } else {
-            CbWbPreset::None
-        };
-
         // Calculate WB offsets based on preset
         let auto_wb_offsets =
-            calculate_wb_preset_offsets(effective_preset, &wb_points, cb.film_character);
+            calculate_wb_preset_offsets(cb.wb_preset, &wb_points, cb.film_character);
 
         if options.debug {
             eprintln!(
                 "[CB] WB preset: {:?}, offsets - R: {:.3}, G: {:.3}, B: {:.3}",
-                effective_preset, auto_wb_offsets[0], auto_wb_offsets[1], auto_wb_offsets[2]
+                cb.wb_preset, auto_wb_offsets[0], auto_wb_offsets[1], auto_wb_offsets[2]
             );
         }
 
@@ -358,8 +353,38 @@ pub fn process_image_cb(
             let (min, max, mean) = compute_stats(&data);
             eprintln!(
                 "[CB] After WB ({:?}) - min: {:.4}, max: {:.4}, mean: {:.4}",
-                effective_preset, min, max, mean
+                cb.wb_preset, min, max, mean
             );
+        }
+    } else if options.enable_auto_wb {
+        use crate::models::AutoWbMode;
+
+        let multipliers = match options.auto_wb_mode {
+            AutoWbMode::GrayPixel => crate::auto_adjust::auto_white_balance(
+                &mut data,
+                channels,
+                options.auto_wb_strength,
+            ),
+            AutoWbMode::Average => crate::auto_adjust::auto_white_balance_avg(
+                &mut data,
+                channels,
+                options.auto_wb_strength,
+            ),
+            AutoWbMode::Percentile => crate::auto_adjust::auto_white_balance_percentile(
+                &mut data,
+                channels,
+                options.auto_wb_strength,
+                98.0,
+            ),
+        };
+
+        if options.debug {
+            eprintln!(
+                "[CB] After auto-WB ({:?}) - multipliers: R={:.4}, G={:.4}, B={:.4}",
+                options.auto_wb_mode, multipliers[0], multipliers[1], multipliers[2]
+            );
+            let (min, max, mean) = compute_stats(&data);
+            eprintln!("[CB]   min: {:.4}, max: {:.4}, mean: {:.4}", min, max, mean);
         }
     }
 

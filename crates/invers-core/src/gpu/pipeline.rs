@@ -3,12 +3,20 @@
 use wgpu;
 
 use super::buffers::{
-    create_uniform_buffer, ColorMatrixParams, GainParams, GpuHistogram, GpuImage, HslAdjustParams,
-    InversionParams, ToneCurveParams as GpuToneCurveParams, UtilityParams, NUM_HISTOGRAM_BUCKETS,
+    create_uniform_buffer, CbInversionParams, CbLayerParams, ColorMatrixParams, GainParams,
+    GpuHistogram, GpuImage, HslAdjustParams, InversionParams, SubsampleParams,
+    ToneCurveParams as GpuToneCurveParams, UtilityParams, NUM_HISTOGRAM_BUCKETS,
 };
 use super::context::{GpuContext, GpuError};
+use crate::cb_pipeline::{
+    analyze_histogram, analyze_wb_points, calculate_wb_gamma, calculate_wb_offsets,
+    calculate_wb_preset_offsets,
+};
 use crate::decoders::DecodedImage;
-use crate::models::{BaseEstimation, ConvertOptions, InversionMode, ShadowLiftMode};
+use crate::models::{
+    AutoWbMode, BaseEstimation, CbLayerOrder, CbWbMethod, CbWbPreset, ConvertOptions,
+    InversionMode, ShadowLiftMode,
+};
 use crate::pipeline::ProcessedImage;
 
 /// Workgroup size for compute shaders
@@ -42,6 +50,173 @@ pub fn process_image_gpu(
     let result_data = gpu_image.download()?;
 
     // Track if we should export as grayscale
+    let export_as_grayscale = decoded.source_is_grayscale || decoded.is_monochrome;
+
+    Ok(ProcessedImage {
+        width: decoded.width,
+        height: decoded.height,
+        data: result_data,
+        channels: decoded.channels,
+        export_as_grayscale,
+    })
+}
+
+/// Process an image using the CB pipeline on the GPU.
+pub fn process_image_cb_gpu(
+    decoded: &DecodedImage,
+    options: &ConvertOptions,
+) -> Result<ProcessedImage, GpuError> {
+    if decoded.channels != 3 {
+        return Err(GpuError::Other(format!(
+            "CB pipeline requires 3-channel RGB, got {}",
+            decoded.channels
+        )));
+    }
+
+    let cb = options.cb_options.clone().unwrap_or_default();
+
+    // Apply film base WB on CPU (if available) and analyze histogram before upload.
+    let mut cpu_data = decoded.data.clone();
+    if let Some(base_estimation) = options.base_estimation.as_ref() {
+        crate::pipeline::apply_film_base_white_balance(&mut cpu_data, base_estimation, options)
+            .map_err(GpuError::Other)?;
+    }
+
+    let analysis = analyze_histogram(
+        &cpu_data,
+        decoded.channels,
+        cb.white_threshold,
+        cb.black_threshold,
+    );
+
+    // Initialize GPU context and upload image.
+    let ctx = GpuContext::new()?;
+    let gpu_image = GpuImage::upload(
+        ctx.device.clone(),
+        ctx.queue.clone(),
+        &cpu_data,
+        decoded.width,
+        decoded.height,
+        decoded.channels as u32,
+    )?;
+
+    let pixel_count = gpu_image.pixel_count();
+
+    // Step 1: CB inversion using per-channel curves.
+    apply_cb_inversion(&ctx, &gpu_image, &analysis, true, pixel_count)?;
+
+    // Step 2: Apply WB preset offsets or auto-WB (CPU analysis, GPU apply).
+    // Use subsampled download for WB analysis (64x smaller transfer for stride=8)
+    const WB_SUBSAMPLE_STRIDE: u32 = 8;
+
+    if cb.wb_preset != CbWbPreset::None {
+        let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
+        let wb_points = analyze_wb_points(&subsampled, decoded.channels);
+        let offsets = calculate_wb_preset_offsets(cb.wb_preset, &wb_points, cb.film_character);
+        let strength = options.auto_wb_strength;
+        let scaled_offsets = [
+            offsets[0] / 255.0 * strength,
+            offsets[1] / 255.0 * strength,
+            offsets[2] / 255.0 * strength,
+        ];
+        apply_gains(
+            &ctx,
+            &gpu_image,
+            [1.0, 1.0, 1.0],
+            [-scaled_offsets[0], -scaled_offsets[1], -scaled_offsets[2]],
+            pixel_count,
+        )?;
+    } else if options.enable_auto_wb {
+        // Use subsampled download for WB analysis (64x smaller transfer for stride=8)
+        let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
+
+        let multipliers = match options.auto_wb_mode {
+            AutoWbMode::GrayPixel => crate::auto_adjust::compute_wb_multipliers_gray_pixel(
+                &subsampled,
+                decoded.channels,
+                options.auto_wb_strength,
+            ),
+            AutoWbMode::Average => crate::auto_adjust::compute_wb_multipliers_avg(
+                &subsampled,
+                decoded.channels,
+                options.auto_wb_strength,
+            ),
+            AutoWbMode::Percentile => crate::auto_adjust::compute_wb_multipliers_percentile(
+                &subsampled,
+                decoded.channels,
+                options.auto_wb_strength,
+                98.0,
+            ),
+        };
+
+        // Apply multipliers on GPU (gains with zero offsets)
+        apply_gains(
+            &ctx,
+            &gpu_image,
+            multipliers,
+            [0.0, 0.0, 0.0],
+            pixel_count,
+        )?;
+    }
+
+    // Step 3: Apply CB layers (WB temp/tint, color gamma, tonal adjustments, toning).
+    let brightness_gamma = 1.0 / (1.0 + cb.brightness * 0.02);
+    let exposure_factor = 1.0 / (1.0 + cb.exposure * 0.02);
+    let color_offsets = [
+        1.0 - cb.cyan * 0.01,
+        1.0 - cb.tint * 0.01,
+        1.0 - cb.temp * 0.01,
+    ];
+
+    let wb_offsets = calculate_wb_offsets(cb.wb_temp, cb.wb_tint, cb.wb_tonality);
+    let wb_gamma = calculate_wb_gamma(cb.wb_temp, cb.wb_tint, cb.wb_tonality);
+
+    let wb_method = match cb.wb_method {
+        CbWbMethod::LinearFixed => 0,
+        CbWbMethod::LinearDynamic => 1,
+        CbWbMethod::ShadowWeighted => 2,
+        CbWbMethod::HighlightWeighted => 3,
+        CbWbMethod::MidtoneWeighted => 4,
+    };
+
+    let layer_order = match cb.layer_order {
+        CbLayerOrder::ColorFirst => 0,
+        CbLayerOrder::TonesFirst => 1,
+    };
+
+    let mut apply_flags = 0u32;
+    if cb.wb_temp != 0.0 || cb.wb_tint != 0.0 {
+        apply_flags |= 1;
+    }
+    if cb.shadow_cyan != 0.0 || cb.shadow_tint != 0.0 || cb.shadow_temp != 0.0 {
+        apply_flags |= 1 << 1;
+    }
+    if cb.highlight_cyan != 0.0 || cb.highlight_tint != 0.0 || cb.highlight_temp != 0.0 {
+        apply_flags |= 1 << 2;
+    }
+
+    let layer_params = CbLayerParams {
+        wb_offsets: [wb_offsets[0], wb_offsets[1], wb_offsets[2], 0.0],
+        wb_gamma: [wb_gamma[0], wb_gamma[1], wb_gamma[2], 0.0],
+        color_offsets: [color_offsets[0], color_offsets[1], color_offsets[2], 0.0],
+        tonal_0: [
+            exposure_factor,
+            brightness_gamma,
+            cb.contrast,
+            cb.highlights,
+        ],
+        tonal_1: [cb.shadows, cb.blacks, cb.whites, cb.shadow_range],
+        tonal_2: [cb.highlight_range, 0.0, 0.0, 0.0],
+        shadow_colors: [cb.shadow_cyan, cb.shadow_tint, cb.shadow_temp, 0.0],
+        highlight_colors: [cb.highlight_cyan, cb.highlight_tint, cb.highlight_temp, 0.0],
+        flags: [wb_method, layer_order, pixel_count, apply_flags],
+    };
+
+    apply_cb_layers(&ctx, &gpu_image, &layer_params, pixel_count)?;
+
+    // Download final output.
+    let result_data = gpu_image.download()?;
+
     let export_as_grayscale = decoded.source_is_grayscale || decoded.is_monochrome;
 
     Ok(ProcessedImage {
@@ -237,6 +412,34 @@ fn apply_inversion(
     };
 
     dispatch_compute(ctx, pipeline, &image.buffer, &uniform_buffer, pixel_count)
+}
+
+fn apply_cb_inversion(
+    ctx: &GpuContext,
+    image: &GpuImage,
+    analysis: &crate::models::CbHistogramAnalysis,
+    is_negative: bool,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = CbInversionParams {
+        white_r: analysis.red.white_point,
+        black_r: analysis.red.black_point,
+        white_g: analysis.green.white_point,
+        black_g: analysis.green.black_point,
+        white_b: analysis.blue.white_point,
+        black_b: analysis.blue.black_point,
+        is_negative: if is_negative { 1 } else { 0 },
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "cb_inversion_params");
+    dispatch_compute(
+        ctx,
+        &ctx.pipelines.cb_inversion,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+    )
 }
 
 fn apply_shadow_lift(
@@ -692,6 +895,22 @@ fn apply_tone_curve(
 
     let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "tone_curve_params");
     dispatch_compute(ctx, pipeline, &image.buffer, &uniform_buffer, pixel_count)
+}
+
+fn apply_cb_layers(
+    ctx: &GpuContext,
+    image: &GpuImage,
+    params: &CbLayerParams,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let uniform_buffer = create_uniform_buffer(&ctx.device, params, "cb_layer_params");
+    dispatch_compute(
+        ctx,
+        &ctx.pipelines.cb_layers,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+    )
 }
 
 fn apply_hsl_adjustments(
@@ -1287,4 +1506,138 @@ fn compute_exposure_gain_cpu(
         options.auto_exposure_min_gain,
         options.auto_exposure_max_gain,
     ))
+}
+
+/// Download a subsampled version of the GPU image for efficient analysis.
+///
+/// Instead of downloading the full image (which can be 150MB+ for high-res scans),
+/// this function runs a GPU shader to extract every Nth pixel, then downloads
+/// only the subsampled result. For stride=8, this reduces transfer size by 64x.
+///
+/// The subsampled data is suitable for global analysis like white balance,
+/// where exact pixel values aren't needed—statistical properties are preserved.
+fn download_subsampled(
+    ctx: &GpuContext,
+    image: &GpuImage,
+    stride: u32,
+) -> Result<Vec<f32>, GpuError> {
+    // Calculate output dimensions
+    let output_width = image.width.div_ceil(stride);
+    let output_height = image.height.div_ceil(stride);
+    let output_pixel_count = output_width * output_height;
+    let output_element_count = output_pixel_count * image.channels;
+
+    // Create output buffer
+    let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("subsample_output"),
+        size: (output_element_count as usize * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    // Create uniform buffer with parameters
+    let params = SubsampleParams {
+        input_width: image.width,
+        input_height: image.height,
+        output_width,
+        stride,
+        output_pixel_count,
+        _padding1: 0,
+        _padding2: 0,
+        _padding3: 0,
+    };
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "subsample_params");
+
+    // Create bind group using the subsample layout
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("subsample_bind_group"),
+        layout: &ctx.pipelines.subsample_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: image.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
+    // Dispatch compute shader
+    let total_workgroups = output_pixel_count.div_ceil(WORKGROUP_SIZE);
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("subsample_encoder"),
+        });
+
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("subsample_pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_pipeline(&ctx.pipelines.subsample);
+        pass.set_bind_group(0, &bind_group, &[]);
+
+        if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
+            pass.dispatch_workgroups(total_workgroups, 1, 1);
+        } else {
+            // Use 2D dispatch for very large outputs
+            let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
+            let workgroups_y = total_workgroups.div_ceil(side);
+            pass.dispatch_workgroups(side, workgroups_y, 1);
+        }
+    }
+
+    ctx.submit_and_wait(encoder);
+
+    // Download the subsampled result
+    let size = (output_element_count as usize * std::mem::size_of::<f32>()) as u64;
+    let staging_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("subsample_staging"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut download_encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("subsample_download_encoder"),
+        });
+
+    download_encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, size);
+
+    ctx.queue.submit(std::iter::once(download_encoder.finish()));
+
+    // Map and read
+    let buffer_slice = staging_buffer.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+
+    ctx.device.poll(wgpu::Maintain::Wait);
+
+    rx.recv()
+        .map_err(|e| GpuError::BufferError(e.to_string()))?
+        .map_err(|e| GpuError::BufferError(e.to_string()))?;
+
+    let data = buffer_slice.get_mapped_range();
+    let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+
+    drop(data);
+    staging_buffer.unmap();
+
+    Ok(result)
 }

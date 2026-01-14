@@ -1,6 +1,12 @@
 // Inversion shaders for film negative to positive conversion.
 // Four modes: linear, logarithmic, divide-blend, mask-aware.
 
+// Compile-time constants for efficient log10/pow10 operations.
+// Using natural log: log10(x) = ln(x) / ln(10) = ln(x) * (1/ln(10))
+// Using exp for pow: 10^x = e^(x * ln(10))
+const LOG10_RECIP: f32 = 0.4342944819;  // 1/ln(10), multiply by this instead of dividing by ln(10)
+const LN10: f32 = 2.302585093;          // ln(10), for converting pow(10, x) to exp(x * LN10)
+
 struct InversionParams {
     base_r: f32,
     base_g: f32,
@@ -68,19 +74,22 @@ fn invert_log(
     let g = max(pixels[idx + 1u], 0.0001);
     let b = max(pixels[idx + 2u], 0.0001);
 
-    // Pre-compute log of base
-    let log_base_r = log(max(params.base_r, 0.0001)) / log(10.0);
-    let log_base_g = log(max(params.base_g, 0.0001)) / log(10.0);
-    let log_base_b = log(max(params.base_b, 0.0001)) / log(10.0);
+    // Pre-compute log10 of base using efficient multiplication by reciprocal
+    // log10(x) = ln(x) * (1/ln(10)) = ln(x) * LOG10_RECIP
+    let log_base_r = log(max(params.base_r, 0.0001)) * LOG10_RECIP;
+    let log_base_g = log(max(params.base_g, 0.0001)) * LOG10_RECIP;
+    let log_base_b = log(max(params.base_b, 0.0001)) * LOG10_RECIP;
 
     // Log inversion: 10^(log_base - log_pixel)
-    let log_r = log(r) / log(10.0);
-    let log_g = log(g) / log(10.0);
-    let log_b = log(b) / log(10.0);
+    // Using log10(x) = ln(x) * LOG10_RECIP
+    let log_r = log(r) * LOG10_RECIP;
+    let log_g = log(g) * LOG10_RECIP;
+    let log_b = log(b) * LOG10_RECIP;
 
-    let inv_r = pow(10.0, log_base_r - log_r);
-    let inv_g = pow(10.0, log_base_g - log_g);
-    let inv_b = pow(10.0, log_base_b - log_b);
+    // 10^x = e^(x * ln(10)) = exp(x * LN10)
+    let inv_r = exp((log_base_r - log_r) * LN10);
+    let inv_g = exp((log_base_g - log_g) * LN10);
+    let inv_b = exp((log_base_b - log_b) * LN10);
 
     pixels[idx] = clamp(inv_r, 0.0, 10.0);
     pixels[idx + 1u] = clamp(inv_g, 0.0, 10.0);
@@ -143,18 +152,17 @@ fn invert_mask_aware(
     let b = pixels[idx + 2u];
 
     // Standard inversion: 1.0 - (pixel / base)
-    var inv_r = 1.0 - (r / max(params.base_r, 0.0001));
-    var inv_g = 1.0 - (g / max(params.base_g, 0.0001));
-    var inv_b = 1.0 - (b / max(params.base_b, 0.0001));
+    let inv_r = 1.0 - (r / max(params.base_r, 0.0001));
+    let raw_inv_g = 1.0 - (g / max(params.base_g, 0.0001));
+    let raw_inv_b = 1.0 - (b / max(params.base_b, 0.0001));
 
     // Apply shadow floor correction for green and blue
     // Removes blue cast from naive mask inversion
-    if (params.green_floor > 0.0) {
-        inv_g = (inv_g - params.green_floor) / (1.0 - params.green_floor);
-    }
-    if (params.blue_floor > 0.0) {
-        inv_b = (inv_b - params.blue_floor) / (1.0 - params.blue_floor);
-    }
+    // Using select() for non-divergent execution on GPU
+    let corrected_g = (raw_inv_g - params.green_floor) / (1.0 - params.green_floor);
+    let corrected_b = (raw_inv_b - params.blue_floor) / (1.0 - params.blue_floor);
+    let inv_g = select(raw_inv_g, corrected_g, params.green_floor > 0.0);
+    let inv_b = select(raw_inv_b, corrected_b, params.blue_floor > 0.0);
 
     pixels[idx] = clamp(inv_r, 0.0, 1.0);
     pixels[idx + 1u] = clamp(inv_g, 0.0, 1.0);

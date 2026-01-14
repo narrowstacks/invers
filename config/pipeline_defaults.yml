@@ -3,12 +3,10 @@
 # This file controls the default processing behavior.
 # All fields are optional - omit a value to use built-in defaults.
 #
-# In RELEASE builds, only the 7 essential options are used (inversion_mode,
-# enable_auto_levels, preserve_headroom, exposure_compensation, enable_auto_color,
-# skip_tone_curve, enable_auto_exposure). Release builds use MaskAware inversion by default.
+# In RELEASE builds, essential options are used and any advanced values specified
+# below override built-in defaults. The testing section remains debug-only.
 #
 # In DEBUG builds, all options are loaded including the testing section.
-# Debug builds use Linear inversion by default.
 
 defaults:
   # ==========================================================================
@@ -40,8 +38,8 @@ defaults:
   enable_auto_exposure: true
 
   # ==========================================================================
-  # ADVANCED OPTIONS (debug builds only)
-  # These are ignored in release builds, which use optimized hardcoded values.
+  # ADVANCED OPTIONS (optional overrides)
+  # These override built-in values in release builds as well.
   # ==========================================================================
 
   # Percentage of pixels to clip when computing auto levels (0.0-10.0)

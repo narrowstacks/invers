@@ -280,11 +280,11 @@ fn default_highlight_range() -> f32 {
 }
 
 fn default_cb_black_threshold() -> f32 {
-    0.0005 // CB default for negatives
+    0.0
 }
 
 fn default_cb_white_threshold() -> f32 {
-    0.0001 // CB default
+    0.0
 }
 
 impl Default for CbOptions {
@@ -790,8 +790,8 @@ impl CbColorModel {
                 green_saturation: 0,
                 blue_hue: 0,
                 blue_saturation: 0,
-                black_threshold: 0.001,
-                white_threshold: 0.001,
+                black_threshold: default_cb_black_threshold(),
+                white_threshold: default_cb_white_threshold(),
                 convert_to_grayscale: false,
             },
             Self::Basic => CbColorModelParams {
@@ -801,8 +801,8 @@ impl CbColorModel {
                 green_saturation: 0,
                 blue_hue: -10,
                 blue_saturation: 0,
-                black_threshold: 0.002,
-                white_threshold: 0.001,
+                black_threshold: default_cb_black_threshold(),
+                white_threshold: default_cb_white_threshold(),
                 convert_to_grayscale: false,
             },
             Self::Frontier => CbColorModelParams {
@@ -812,8 +812,8 @@ impl CbColorModel {
                 green_saturation: 0,
                 blue_hue: -15,
                 blue_saturation: 0,
-                black_threshold: 0.002,
-                white_threshold: 0.002,
+                black_threshold: default_cb_black_threshold(),
+                white_threshold: default_cb_white_threshold(),
                 convert_to_grayscale: false,
             },
             Self::Noritsu => CbColorModelParams {
@@ -823,8 +823,8 @@ impl CbColorModel {
                 green_saturation: 0,
                 blue_hue: -10,
                 blue_saturation: 0,
-                black_threshold: 0.002,
-                white_threshold: 0.002,
+                black_threshold: default_cb_black_threshold(),
+                white_threshold: default_cb_white_threshold(),
                 convert_to_grayscale: false,
             },
             Self::BlackAndWhite => CbColorModelParams {
@@ -834,8 +834,8 @@ impl CbColorModel {
                 green_saturation: 0,
                 blue_hue: 0,
                 blue_saturation: 0,
-                black_threshold: 0.002,
-                white_threshold: 0.002,
+                black_threshold: default_cb_black_threshold(),
+                white_threshold: default_cb_white_threshold(),
                 convert_to_grayscale: true,
             },
         }

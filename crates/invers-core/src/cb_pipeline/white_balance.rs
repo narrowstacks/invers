@@ -80,8 +80,8 @@ pub fn calculate_wb_offsets(wb_temp: f32, wb_tint: f32, tonality: CbWbTonality) 
 
 /// Calculate gamma multipliers for gamma-based WB methods
 pub fn calculate_wb_gamma(wb_temp: f32, wb_tint: f32, tonality: CbWbTonality) -> [f32; 3] {
-    let temp_factor = wb_temp * 0.01;
-    let tint_factor = wb_tint * 0.01;
+    let temp_factor = (wb_temp / 255.0 / TEMP_MULTIPLIER).clamp(-0.99, 0.99);
+    let tint_factor = (wb_tint / 255.0 / TEMP_MULTIPLIER).clamp(-0.99, 0.99);
 
     match tonality {
         CbWbTonality::NeutralDensity => [
