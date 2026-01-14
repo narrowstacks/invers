@@ -259,12 +259,13 @@ pub fn process_single_image(
     }
 
     // Apply auto-WB mode from white balance preset or debug override
-    let effective_wb_mode = if params.auto_wb_mode != "avg" && params.auto_wb_mode != wb_settings.mode {
-        // Debug arg explicitly overrode mode
-        &params.auto_wb_mode
-    } else {
-        wb_settings.mode
-    };
+    let effective_wb_mode =
+        if params.auto_wb_mode != "avg" && params.auto_wb_mode != wb_settings.mode {
+            // Debug arg explicitly overrode mode
+            &params.auto_wb_mode
+        } else {
+            wb_settings.mode
+        };
     options.auto_wb_mode = match effective_wb_mode.to_lowercase().as_str() {
         "avg" | "average" | "grayworld" => AutoWbMode::Average,
         "pct" | "percentile" | "whitepatch" => AutoWbMode::Percentile,

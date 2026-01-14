@@ -28,7 +28,9 @@ use commands::{cmd_diagnose, cmd_test_params};
 #[derive(Parser)]
 #[command(name = "invers")]
 #[command(version, about = "Film negative to positive converter", long_about = None)]
-#[command(after_help = "Use --help with a subcommand for more options. Advanced/research flags are hidden by default.")]
+#[command(
+    after_help = "Use --help with a subcommand for more options. Advanced/research flags are hidden by default."
+)]
 struct Cli {
     /// Show the path to the config file being used (if any) and exit
     #[arg(long)]
@@ -163,7 +165,9 @@ impl DebugArgs {
 #[derive(Subcommand)]
 enum Commands {
     /// Convert negative image(s) to positive
-    #[command(after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features.")]
+    #[command(
+        after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features."
+    )]
     Convert {
         /// Input file or directory
         #[arg(value_name = "INPUT")]
@@ -174,7 +178,12 @@ enum Commands {
         out: Option<PathBuf>,
 
         /// Export format (tiff16 or dng)
-        #[arg(long, value_name = "FORMAT", default_value = "tiff16", help_heading = "Output Options")]
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            default_value = "tiff16",
+            help_heading = "Output Options"
+        )]
         export: String,
 
         /// White balance preset: auto (default), none, neutral, warm, cool
@@ -182,7 +191,12 @@ enum Commands {
         white_balance: WhiteBalance,
 
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
-        #[arg(long, value_name = "FLOAT", default_value = "1.0", help_heading = "Processing Options")]
+        #[arg(
+            long,
+            value_name = "FLOAT",
+            default_value = "1.0",
+            help_heading = "Processing Options"
+        )]
         exposure: f32,
 
         /// Manual base RGB values (comma-separated: R,G,B)
@@ -255,7 +269,9 @@ enum Commands {
     /// By default, assumes all images are from the same roll of film and shares
     /// the base color estimation from the first image across all files.
     /// Use --per-image to estimate base for each file independently.
-    #[command(after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features.")]
+    #[command(
+        after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features."
+    )]
     Batch {
         /// Input files or directories
         #[arg(value_name = "INPUTS")]
@@ -281,7 +297,12 @@ enum Commands {
         per_image: bool,
 
         /// Export format (tiff16 or dng)
-        #[arg(long, value_name = "FORMAT", default_value = "tiff16", help_heading = "Output Options")]
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            default_value = "tiff16",
+            help_heading = "Output Options"
+        )]
         export: String,
 
         /// Output directory
@@ -293,7 +314,12 @@ enum Commands {
         white_balance: WhiteBalance,
 
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
-        #[arg(long, value_name = "FLOAT", default_value = "1.0", help_heading = "Processing Options")]
+        #[arg(
+            long,
+            value_name = "FLOAT",
+            default_value = "1.0",
+            help_heading = "Processing Options"
+        )]
         exposure: f32,
 
         /// Force black and white conversion mode
