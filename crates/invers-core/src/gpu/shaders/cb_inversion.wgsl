@@ -43,13 +43,9 @@ fn invert_cb(
     let g_norm = clamp((g_255 - params.black_g) / g_range, 0.0, 1.0);
     let b_norm = clamp((b_255 - params.black_b) / b_range, 0.0, 1.0);
 
-    if (params.is_negative != 0u) {
-        pixels[idx] = 1.0 - r_norm;
-        pixels[idx + 1u] = 1.0 - g_norm;
-        pixels[idx + 2u] = 1.0 - b_norm;
-    } else {
-        pixels[idx] = r_norm;
-        pixels[idx + 1u] = g_norm;
-        pixels[idx + 2u] = b_norm;
-    }
+    // Use select() for branchless negative/positive selection
+    let is_neg = params.is_negative != 0u;
+    pixels[idx] = select(r_norm, 1.0 - r_norm, is_neg);
+    pixels[idx + 1u] = select(g_norm, 1.0 - g_norm, is_neg);
+    pixels[idx + 2u] = select(b_norm, 1.0 - b_norm, is_neg);
 }

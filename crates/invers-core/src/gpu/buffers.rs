@@ -256,6 +256,13 @@ pub struct InversionParams {
     pub bw_headroom: f32,
     pub pixel_count: u32,
     pub _padding: u32,
+    /// Pre-computed log10(base_r) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_r: f32,
+    /// Pre-computed log10(base_g) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_g: f32,
+    /// Pre-computed log10(base_b) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_b: f32,
+    pub _padding2: f32,
 }
 
 /// Tone curve parameters for uniform buffer.

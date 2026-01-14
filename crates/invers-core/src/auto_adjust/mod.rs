@@ -16,7 +16,8 @@ pub(crate) const PARALLEL_THRESHOLD: usize = 30_000;
 pub use white_balance::{
     apply_white_balance_from_temperature, auto_white_balance, auto_white_balance_avg,
     auto_white_balance_no_clip, auto_white_balance_percentile, compute_wb_multipliers_avg,
-    compute_wb_multipliers_gray_pixel, compute_wb_multipliers_percentile, kelvin_to_rgb_multipliers,
+    compute_wb_multipliers_gray_pixel, compute_wb_multipliers_percentile,
+    kelvin_to_rgb_multipliers,
 };
 
 // Re-export levels functions and types

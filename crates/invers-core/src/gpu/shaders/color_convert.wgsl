@@ -71,7 +71,7 @@ fn hue_to_rgb(p: f32, q: f32, t_in: f32) -> f32 {
     return result;
 }
 
-// RGB to HSL conversion
+// RGB to HSL conversion - optimized with select() to reduce branching
 fn rgb_to_hsl_impl(r: f32, g: f32, b: f32) -> vec3<f32> {
     let max_val = max(max(r, g), b);
     let min_val = min(min(r, g), b);
@@ -80,47 +80,44 @@ fn rgb_to_hsl_impl(r: f32, g: f32, b: f32) -> vec3<f32> {
     // Lightness
     let l = (max_val + min_val) / 2.0;
 
-    var h: f32 = 0.0;
-    var s: f32 = 0.0;
+    // Saturation - compute both branches and select
+    let s_low = delta / max(max_val + min_val, 0.0001);
+    let s_high = delta / max(2.0 - max_val - min_val, 0.0001);
+    let s = select(s_high, s_low, l < 0.5);
 
-    if (delta > 0.0001) {
-        // Saturation
-        if (l < 0.5) {
-            s = delta / (max_val + min_val);
-        } else {
-            s = delta / (2.0 - max_val - min_val);
-        }
+    // Hue calculation - compute all branches
+    // When max is R: h = (g - b) / delta, add 6 if g < b
+    let h_r_base = (g - b) / max(delta, 0.0001);
+    let h_r = select(h_r_base, h_r_base + 6.0, g < b);
+    // When max is G: h = (b - r) / delta + 2
+    let h_g = (b - r) / max(delta, 0.0001) + 2.0;
+    // When max is B: h = (r - g) / delta + 4
+    let h_b = (r - g) / max(delta, 0.0001) + 4.0;
 
-        // Hue
-        if (max_val == r) {
-            h = (g - b) / delta;
-            if (g < b) {
-                h = h + 6.0;
-            }
-        } else if (max_val == g) {
-            h = (b - r) / delta + 2.0;
-        } else {
-            h = (r - g) / delta + 4.0;
-        }
+    // Select based on which component is max (use epsilon comparison for float equality)
+    let eps = 0.0001;
+    let is_r_max = abs(max_val - r) < eps;
+    let is_g_max = abs(max_val - g) < eps;
 
-        h = h * 60.0; // Convert to degrees
-    }
+    // Chained select: check R first, then G, default to B
+    let h_raw = select(select(h_b, h_g, is_g_max), h_r, is_r_max);
+    let h = h_raw * 60.0; // Convert to degrees
 
-    return vec3<f32>(h, s, l);
+    // Zero out h and s when delta is negligible (grayscale)
+    let has_color = delta > 0.0001;
+    return vec3<f32>(
+        select(0.0, h, has_color),
+        select(0.0, s, has_color),
+        l
+    );
 }
 
-// HSL to RGB conversion
+// HSL to RGB conversion - optimized with select()
 fn hsl_to_rgb_impl(h: f32, s: f32, l: f32) -> vec3<f32> {
-    if (s < 0.0001) {
-        return vec3<f32>(l, l, l);
-    }
-
-    var q: f32;
-    if (l < 0.5) {
-        q = l * (1.0 + s);
-    } else {
-        q = l + s - l * s;
-    }
+    // Compute both q branches and select
+    let q_low = l * (1.0 + s);
+    let q_high = l + s - l * s;
+    let q = select(q_high, q_low, l < 0.5);
     let p = 2.0 * l - q;
 
     let h_norm = h / 360.0;
@@ -129,7 +126,8 @@ fn hsl_to_rgb_impl(h: f32, s: f32, l: f32) -> vec3<f32> {
     let g = hue_to_rgb(p, q, h_norm);
     let b = hue_to_rgb(p, q, h_norm - 1.0 / 3.0);
 
-    return vec3<f32>(r, g, b);
+    // Return grayscale if saturation is negligible
+    return select(vec3<f32>(r, g, b), vec3<f32>(l, l, l), s < 0.0001);
 }
 
 // Convert RGB to HSL (in-place)

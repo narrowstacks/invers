@@ -31,22 +31,30 @@ fn get_pixel_index(id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
 // Unlike hard clamping which loses all information above 1.0,
 // soft-clipping applies a smooth compression curve that preserves
 // relative differences while preventing overflow.
+// Optimized with select() for reduced branching
 fn soft_clip_highlight(value: f32, knee: f32) -> f32 {
-    if (value <= 0.0) {
-        return WORKING_RANGE_FLOOR;
-    } else if (value <= 1.0 - knee) {
-        // Below knee: pass through unchanged
-        return value;
-    } else if (value >= 1.0 + knee) {
-        // Far above 1.0: asymptote just below ceiling
-        return WORKING_RANGE_CEILING;
-    } else {
-        // In knee region: smooth exponential compression
-        let knee_start = 1.0 - knee;
-        let normalized = (value - knee_start) / (2.0 * knee);
-        let compressed = 1.0 - exp(-normalized * 2.0);
-        return knee_start + knee * compressed;
-    }
+    let knee_start = 1.0 - knee;
+
+    // Compute all possible results
+    let floor_result = WORKING_RANGE_FLOOR;
+    let passthrough = value;
+    let ceiling_result = WORKING_RANGE_CEILING;
+
+    // Knee region: smooth exponential compression
+    let normalized = (value - knee_start) / (2.0 * knee);
+    let compressed = 1.0 - exp(-normalized * 2.0);
+    let knee_result = knee_start + knee * compressed;
+
+    // Select based on value region (branchless chained select)
+    return select(
+        select(
+            select(ceiling_result, knee_result, value < 1.0 + knee),
+            passthrough,
+            value <= knee_start
+        ),
+        floor_result,
+        value <= 0.0
+    );
 }
 
 // Soft-clip with default 5% knee
@@ -139,10 +147,18 @@ fn shadow_lift(
     pixels[idx + 2u] = clamp(pixels[idx + 2u] + lift, 0.0, 1.0);
 }
 
+// Helper function to compress a single channel value
+fn compress_channel(value: f32, threshold: f32, compression: f32) -> f32 {
+    let excess = value - threshold;
+    let compressed = threshold + excess * compression;
+    return select(value, compressed, value > threshold);
+}
+
 // Apply highlight compression (soft-clip above threshold)
 // param1: threshold (e.g., 0.9)
 // param2: compression factor (0.0 = full compress, 1.0 = no compress)
 // param3: unused
+// Optimized: unrolled loop and branchless compression
 @compute @workgroup_size(256)
 fn highlight_compress(
     @builtin(global_invocation_id) id: vec3<u32>,
@@ -157,13 +173,10 @@ fn highlight_compress(
     let threshold = params.param1;
     let compression = params.param2;
 
-    for (var c: u32 = 0u; c < 3u; c = c + 1u) {
-        let value = pixels[idx + c];
-        if (value > threshold) {
-            let excess = value - threshold;
-            pixels[idx + c] = threshold + excess * compression;
-        }
-    }
+    // Unrolled loop with branchless compression using select()
+    pixels[idx] = compress_channel(pixels[idx], threshold, compression);
+    pixels[idx + 1u] = compress_channel(pixels[idx + 1u], threshold, compression);
+    pixels[idx + 2u] = compress_channel(pixels[idx + 2u], threshold, compression);
 }
 
 // Apply base offset addition (for film preset base_offsets)

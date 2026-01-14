@@ -16,6 +16,12 @@ struct InversionParams {
     bw_headroom: f32,  // Headroom for B&W mode (e.g., 0.05 = 5%)
     pixel_count: u32,
     _padding: u32,
+    // Pre-computed log10 values for bases (computed on CPU to avoid per-pixel recalculation)
+    // If not provided (0.0), they will be computed in shader
+    log_base_r: f32,
+    log_base_g: f32,
+    log_base_b: f32,
+    _padding2: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> pixels: array<f32>;
@@ -59,6 +65,7 @@ fn invert_linear(
 }
 
 // Logarithmic (density-based) inversion: positive = 10^(log10(base) - log10(negative))
+// Optimized: Uses pre-computed log_base values from uniform params when available
 @compute @workgroup_size(256)
 fn invert_log(
     @builtin(global_invocation_id) id: vec3<u32>,
@@ -74,11 +81,23 @@ fn invert_log(
     let g = max(pixels[idx + 1u], 0.0001);
     let b = max(pixels[idx + 2u], 0.0001);
 
-    // Pre-compute log10 of base using efficient multiplication by reciprocal
-    // log10(x) = ln(x) * (1/ln(10)) = ln(x) * LOG10_RECIP
-    let log_base_r = log(max(params.base_r, 0.0001)) * LOG10_RECIP;
-    let log_base_g = log(max(params.base_g, 0.0001)) * LOG10_RECIP;
-    let log_base_b = log(max(params.base_b, 0.0001)) * LOG10_RECIP;
+    // Use pre-computed log_base values if provided, otherwise compute
+    // (Uniform values are broadcast efficiently - this check is free)
+    let log_base_r = select(
+        log(max(params.base_r, 0.0001)) * LOG10_RECIP,
+        params.log_base_r,
+        params.log_base_r != 0.0
+    );
+    let log_base_g = select(
+        log(max(params.base_g, 0.0001)) * LOG10_RECIP,
+        params.log_base_g,
+        params.log_base_g != 0.0
+    );
+    let log_base_b = select(
+        log(max(params.base_b, 0.0001)) * LOG10_RECIP,
+        params.log_base_b,
+        params.log_base_b != 0.0
+    );
 
     // Log inversion: 10^(log_base - log_pixel)
     // Using log10(x) = ln(x) * LOG10_RECIP

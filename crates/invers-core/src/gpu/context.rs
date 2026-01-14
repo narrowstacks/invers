@@ -78,6 +78,12 @@ pub struct GpuPipelines {
     // Subsample for efficient analysis downloads
     pub subsample: wgpu::ComputePipeline,
     pub subsample_layout: wgpu::BindGroupLayout,
+
+    // Cached bind group layouts for batched operations
+    /// Layout for storage buffer (read-write) + uniform buffer pattern
+    pub storage_uniform_layout: wgpu::BindGroupLayout,
+    /// Layout for histogram operations (read-only pixels + 3 atomic histogram buffers)
+    pub histogram_layout: wgpu::BindGroupLayout,
 }
 
 /// GPU context holding the wgpu device, queue, and pre-compiled pipelines.
@@ -654,6 +660,8 @@ impl GpuContext {
             cb_layers,
             subsample,
             subsample_layout,
+            storage_uniform_layout,
+            histogram_layout,
         })
     }
 

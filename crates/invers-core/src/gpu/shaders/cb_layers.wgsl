@@ -52,177 +52,220 @@ fn apply_inverse_sigmoid(contrast: f32, midpoint: f32, x: f32, range: f32) -> f3
     return (midpoint + 2.0 / contrast * atanh(arg)) * r;
 }
 
+// Apply white balance - optimized with reduced branching
 fn apply_wb_value(value: f32, offset: f32, gamma: f32, method: u32) -> f32 {
     let v = value;
-    if (method == 0u) { // LinearFixed
-        if (v > 0.0 && v < 1.0) {
-            if (v > HIGHLIGHT_THRESHOLD) {
-                let blend = 1.0 - HIGHLIGHT_THRESHOLD;
-                return clamp01(
-                    offset + (blend * v - offset * v + offset * HIGHLIGHT_THRESHOLD) / blend
-                );
-            } else if (v < SHADOW_THRESHOLD) {
-                return clamp01(v + offset * v / SHADOW_THRESHOLD);
-            }
-            return clamp01(v + offset);
-        }
-        return clamp01(v);
-    } else if (method == 1u) { // LinearDynamic
-        return clamp01(v + offset);
-    } else if (method == 2u) { // ShadowWeighted
-        return clamp01(pow(v, 1.0 / gamma));
-    } else if (method == 3u) { // HighlightWeighted
-        return clamp01(1.0 - pow(1.0 - v, gamma));
-    }
-    return clamp01((pow(v, 1.0 / gamma) + 1.0 - pow(1.0 - v, gamma)) / 2.0);
+
+    // Pre-compute all possible results to reduce divergent branches
+    // Method 0: LinearFixed with region-based blending
+    let blend = 1.0 - HIGHLIGHT_THRESHOLD;
+    let linear_fixed_highlight = offset + (blend * v - offset * v + offset * HIGHLIGHT_THRESHOLD) / blend;
+    let linear_fixed_shadow = v + offset * v / SHADOW_THRESHOLD;
+    let linear_fixed_mid = v + offset;
+
+    // Select LinearFixed result based on value region (branchless for inner selection)
+    let in_valid_range = v > 0.0 && v < 1.0;
+    let is_highlight = v > HIGHLIGHT_THRESHOLD;
+    let is_shadow = v < SHADOW_THRESHOLD;
+    let linear_fixed_result = select(
+        select(linear_fixed_mid, linear_fixed_shadow, is_shadow),
+        linear_fixed_highlight,
+        is_highlight
+    );
+    let method0_result = select(v, linear_fixed_result, in_valid_range);
+
+    // Method 1: LinearDynamic
+    let method1_result = v + offset;
+
+    // Method 2: ShadowWeighted gamma
+    let method2_result = pow(v, 1.0 / gamma);
+
+    // Method 3: HighlightWeighted gamma
+    let method3_result = 1.0 - pow(1.0 - v, gamma);
+
+    // Method 4: Balanced (default)
+    let method4_result = (method2_result + method3_result) / 2.0;
+
+    // Select result based on method using chained select (reduces divergence)
+    let result = select(
+        select(
+            select(
+                select(method4_result, method3_result, method == 3u),
+                method2_result, method == 2u
+            ),
+            method1_result, method == 1u
+        ),
+        method0_result, method == 0u
+    );
+
+    return clamp01(result);
 }
 
 fn apply_gamma(value: f32, gamma: f32) -> f32 {
     return pow(value, gamma);
 }
 
+// Apply exposure - optimized with select() to reduce branching
 fn apply_exposure(value: f32, exposure: f32) -> f32 {
-    if (exposure < 1.0) {
-        return 1.0 - pow(1.0 - value, 1.0 / exposure);
-    } else if (exposure > 1.0) {
-        return value * (1.0 - (1.0 - pow(2.0, -exposure)) * 0.4);
-    }
-    return value;
+    // Pre-compute both results
+    let under_exposed = 1.0 - pow(1.0 - value, 1.0 / exposure);
+    let over_exposed = value * (1.0 - (1.0 - pow(2.0, -exposure)) * 0.4);
+
+    // Select based on exposure value (reduces divergent branching)
+    return select(
+        select(value, over_exposed, exposure > 1.0),
+        under_exposed,
+        exposure < 1.0
+    );
 }
 
+// Apply contrast - optimized with select()
 fn apply_contrast(value: f32, contrast: f32) -> f32 {
     let midpoint = 0.5;
     let scale = 0.2;
-    if (contrast >= 1.0) {
-        let c = 1.0 + contrast * scale;
-        return apply_sigmoid(c, midpoint, value, 1.0);
-    } else if (contrast <= -1.0) {
-        let c = 1.0 + abs(contrast) * scale * 0.5;
-        return apply_inverse_sigmoid(c, midpoint, value, 1.0);
-    }
-    return value;
+    let c_pos = 1.0 + contrast * scale;
+    let c_neg = 1.0 + abs(contrast) * scale * 0.5;
+
+    let sigmoid_result = apply_sigmoid(c_pos, midpoint, value, 1.0);
+    let inv_sigmoid_result = apply_inverse_sigmoid(c_neg, midpoint, value, 1.0);
+
+    return select(
+        select(value, inv_sigmoid_result, contrast <= -1.0),
+        sigmoid_result,
+        contrast >= 1.0
+    );
 }
 
+// Apply highlights - optimized with select()
 fn apply_highlights(value: f32, highlights: f32) -> f32 {
     let midpoint = 0.75;
     let range = 0.9;
     let scale = 0.1;
     let strength = 0.5 + abs(highlights) * scale;
-    if (highlights >= 1.0) {
-        if (value > 1.0 - range) {
-            return 1.0 - apply_sigmoid(strength, midpoint, 1.0 - value, range);
-        }
-    } else if (highlights <= -1.0) {
-        if (value > 1.0 - range) {
-            return 1.0 - apply_inverse_sigmoid(strength, midpoint, 1.0 - value, range);
-        }
-    }
-    return value;
+    let inv_value = 1.0 - value;
+    let in_range = value > 1.0 - range;
+
+    let pos_result = 1.0 - apply_sigmoid(strength, midpoint, inv_value, range);
+    let neg_result = 1.0 - apply_inverse_sigmoid(strength, midpoint, inv_value, range);
+
+    // Apply only if in range and highlights active
+    let adjusted = select(
+        select(value, neg_result, highlights <= -1.0),
+        pos_result,
+        highlights >= 1.0
+    );
+    return select(value, adjusted, in_range);
 }
 
+// Apply shadows - optimized with select()
 fn apply_shadows(value: f32, shadows: f32) -> f32 {
     let midpoint = 0.75;
     let range = 0.9;
     let strength = 0.5 + abs(shadows) * 0.1;
-    if (shadows > 0.0) {
-        if (value < range) {
-            return apply_inverse_sigmoid(strength, midpoint, value, range);
-        }
-    } else if (shadows < 0.0) {
-        if (value < range) {
-            return apply_sigmoid(strength, midpoint, value, range);
-        }
-    }
-    return value;
+    let in_range = value < range;
+
+    let pos_result = apply_inverse_sigmoid(strength, midpoint, value, range);
+    let neg_result = apply_sigmoid(strength, midpoint, value, range);
+
+    let adjusted = select(
+        select(value, neg_result, shadows < 0.0),
+        pos_result,
+        shadows > 0.0
+    );
+    return select(value, adjusted, in_range);
 }
 
+// Apply blacks - optimized with select()
 fn apply_blacks(value: f32, blacks: f32, shadow_range: f32) -> f32 {
     let decay = (-shadow_range + 1.0) * 0.33 + 5.0;
     let midpoint = 0.75;
     let range = 0.5;
-    if (blacks >= 1.0) {
-        let lift = blacks / 255.0;
-        if (value < 0.9) {
-            return lift * exp(-value * decay) + value;
-        }
-    } else if (blacks <= -1.0) {
-        let strength = 0.5 + abs(blacks) * 0.1;
-        if (value < range) {
-            return apply_sigmoid(strength, midpoint, value, range);
-        }
-    }
-    return value;
+    let lift = blacks / 255.0;
+    let strength = 0.5 + abs(blacks) * 0.1;
+
+    let pos_result = lift * exp(-value * decay) + value;
+    let neg_result = apply_sigmoid(strength, midpoint, value, range);
+
+    let pos_active = blacks >= 1.0 && value < 0.9;
+    let neg_active = blacks <= -1.0 && value < range;
+
+    return select(select(value, neg_result, neg_active), pos_result, pos_active);
 }
 
+// Apply whites - optimized with select()
 fn apply_whites(value: f32, whites: f32, highlight_range: f32) -> f32 {
     let decay = (-highlight_range + 1.0) * 0.33 + 5.0;
     let midpoint = 0.75;
     let range = 0.5;
-    if (whites <= -1.0) {
-        let lift = -whites / 255.0;
-        if (value > 0.1) {
-            return 1.0 - lift * exp(-(1.0 - value) * decay) - (1.0 - value);
-        }
-    } else if (whites >= 1.0) {
-        let strength = 0.5 + abs(whites) * 0.1;
-        if (value > 1.0 - range) {
-            return 1.0 - apply_sigmoid(strength, midpoint, 1.0 - value, range);
-        }
-    }
-    return value;
+    let lift = -whites / 255.0;
+    let strength = 0.5 + abs(whites) * 0.1;
+    let inv_value = 1.0 - value;
+
+    let neg_result = 1.0 - lift * exp(-inv_value * decay) - inv_value;
+    let pos_result = 1.0 - apply_sigmoid(strength, midpoint, inv_value, range);
+
+    let neg_active = whites <= -1.0 && value > 0.1;
+    let pos_active = whites >= 1.0 && value > 1.0 - range;
+
+    return select(select(value, pos_result, pos_active), neg_result, neg_active);
 }
 
+// Apply color gamma - optimized with select()
 fn apply_color_gamma(value: f32, color_offset: f32) -> f32 {
     let blend_range = 0.2;
     let offset = (1.0 - color_offset) / 4.0;
     let adjusted = value - offset;
-    if (value > 0.0 && value < 1.0) {
-        if (adjusted >= 1.0) {
-            return 1.0;
-        } else if (value > 1.0 - blend_range) {
-            return value - offset * (1.0 - value) / blend_range;
-        } else if (adjusted <= 0.0) {
-            return 0.0;
-        }
-        return adjusted;
-    }
-    return value;
+    let in_valid_range = value > 0.0 && value < 1.0;
+    let in_blend_zone = value > 1.0 - blend_range;
+
+    let blend_result = value - offset * (1.0 - value) / blend_range;
+
+    // Nested select for region-based result
+    let region_result = select(
+        select(adjusted, 0.0, adjusted <= 0.0),
+        select(adjusted, blend_result, in_blend_zone),
+        adjusted < 1.0
+    );
+    let clamped_result = select(region_result, 1.0, adjusted >= 1.0);
+
+    return select(value, clamped_result, in_valid_range);
 }
 
+// Apply shadow tone - optimized with select()
 fn apply_shadow_tone(value: f32, shadow_color: f32, shadow_range: f32) -> f32 {
     let range = 0.9 - (10.0 - shadow_range) * 0.0444;
     let midpoint = 0.75;
     let scale = 0.125;
     let color_shift = -shadow_color;
-    if (color_shift == 0.0) {
-        return value;
-    }
     let strength = 0.75 + abs(color_shift) * (1.0 + (10.0 - shadow_range) / 18.0) * scale;
-    if (value < range) {
-        if (color_shift > 0.0) {
-            return apply_inverse_sigmoid(strength, midpoint, value, range);
-        }
-        return apply_sigmoid(strength, midpoint, value, range);
-    }
-    return value;
+    let in_range = value < range;
+
+    let pos_result = apply_inverse_sigmoid(strength, midpoint, value, range);
+    let neg_result = apply_sigmoid(strength, midpoint, value, range);
+
+    let adjusted = select(neg_result, pos_result, color_shift > 0.0);
+    let has_shift = color_shift != 0.0;
+
+    return select(value, select(value, adjusted, in_range), has_shift);
 }
 
+// Apply highlight tone - optimized with select()
 fn apply_highlight_tone(value: f32, highlight_color: f32, highlight_range: f32) -> f32 {
     let range = 0.9 - (10.0 - highlight_range) * 0.0444;
     let midpoint = 0.75;
     let scale = 0.125;
     let color_shift = -highlight_color;
-    if (color_shift == 0.0) {
-        return value;
-    }
     let strength = 0.75 + abs(color_shift) * (1.0 + (10.0 - highlight_range) / 18.0) * scale;
-    if (value > 1.0 - range) {
-        if (color_shift > 0.0) {
-            return 1.0 - apply_sigmoid(strength, midpoint, 1.0 - value, range);
-        }
-        return 1.0 - apply_inverse_sigmoid(strength, midpoint, 1.0 - value, range);
-    }
-    return value;
+    let inv_value = 1.0 - value;
+    let in_range = value > 1.0 - range;
+
+    let pos_result = 1.0 - apply_sigmoid(strength, midpoint, inv_value, range);
+    let neg_result = 1.0 - apply_inverse_sigmoid(strength, midpoint, inv_value, range);
+
+    let adjusted = select(neg_result, pos_result, color_shift > 0.0);
+    let has_shift = color_shift != 0.0;
+
+    return select(value, select(value, adjusted, in_range), has_shift);
 }
 
 // Helper: Apply all tonal adjustments (exposure, brightness, contrast, highlights, shadows, blacks, whites)

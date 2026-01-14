@@ -22,6 +22,92 @@ use crate::pipeline::ProcessedImage;
 /// Workgroup size for compute shaders
 const WORKGROUP_SIZE: u32 = 256;
 
+// ============================================================================
+// Command Batching Infrastructure
+// ============================================================================
+
+/// A batch of GPU commands that can be accumulated and submitted together.
+///
+/// Instead of submitting and waiting after each operation (which causes CPU-GPU
+/// synchronization overhead), this struct accumulates compute passes into a single
+/// command encoder. Commands are only submitted when:
+/// 1. `flush()` is called (when data needs to be read back)
+/// 2. `finish()` is called (at the end of the pipeline)
+///
+/// This can provide 2-4x speedup for pipelines with many stages.
+pub struct CommandBatch<'a> {
+    ctx: &'a GpuContext,
+    encoder: Option<wgpu::CommandEncoder>,
+    label: &'static str,
+}
+
+impl<'a> CommandBatch<'a> {
+    /// Create a new command batch.
+    pub fn new(ctx: &'a GpuContext, label: &'static str) -> Self {
+        Self {
+            ctx,
+            encoder: Some(
+                ctx.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) }),
+            ),
+            label,
+        }
+    }
+
+    /// Get mutable access to the encoder for recording commands.
+    /// Panics if the batch has already been finished.
+    fn encoder_mut(&mut self) -> &mut wgpu::CommandEncoder {
+        self.encoder
+            .as_mut()
+            .expect("CommandBatch already finished")
+    }
+
+    /// Submit all accumulated commands and wait for completion.
+    /// Use this when you need to read data back from the GPU.
+    /// After flushing, a new encoder is created for subsequent commands.
+    pub fn flush(&mut self) {
+        if let Some(encoder) = self.encoder.take() {
+            self.ctx.queue.submit(std::iter::once(encoder.finish()));
+            self.ctx.device.poll(wgpu::Maintain::Wait);
+
+            // Create a new encoder for subsequent commands
+            self.encoder = Some(self.ctx.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some(self.label),
+                },
+            ));
+        }
+    }
+
+    /// Submit all accumulated commands and wait for completion.
+    /// This consumes the batch - no more commands can be added.
+    pub fn finish(mut self) {
+        if let Some(encoder) = self.encoder.take() {
+            self.ctx.queue.submit(std::iter::once(encoder.finish()));
+            self.ctx.device.poll(wgpu::Maintain::Wait);
+        }
+    }
+
+    /// Record a compute dispatch into the batch without submitting.
+    pub fn dispatch(
+        &mut self,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        workgroups_x: u32,
+        workgroups_y: u32,
+        label: &'static str,
+    ) {
+        let encoder = self.encoder_mut();
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+    }
+}
+
 /// Process an image on the GPU.
 pub fn process_image_gpu(
     decoded: &DecodedImage,
@@ -61,7 +147,12 @@ pub fn process_image_gpu(
     })
 }
 
-/// Process an image using the CB pipeline on the GPU.
+/// Process an image using the CB pipeline on the GPU with batched command submission.
+///
+/// The CB pipeline uses fewer sync points than the legacy pipeline since it has
+/// less CPU analysis. Sync points are:
+/// 1. After CB inversion (before downloading subsampled data for WB analysis)
+/// 2. Final sync at end (implicit via download)
 pub fn process_image_cb_gpu(
     decoded: &DecodedImage,
     options: &ConvertOptions,
@@ -102,64 +193,80 @@ pub fn process_image_cb_gpu(
 
     let pixel_count = gpu_image.pixel_count();
 
-    // Step 1: CB inversion using per-channel curves.
-    apply_cb_inversion(&ctx, &gpu_image, &analysis, true, pixel_count)?;
+    // Create command batch for accumulating GPU operations
+    let mut batch = CommandBatch::new(&ctx, "cb_pipeline_batch");
 
-    // Step 2: Apply WB preset offsets or auto-WB (CPU analysis, GPU apply).
+    // ========================================================================
+    // Step 1: CB inversion using per-channel curves (batched)
+    // ========================================================================
+    apply_cb_inversion_batched(&mut batch, &ctx, &gpu_image, &analysis, true, pixel_count)?;
+
+    // ========================================================================
+    // SYNC POINT: WB analysis needs subsampled readback
+    // ========================================================================
     // Use subsampled download for WB analysis (64x smaller transfer for stride=8)
     const WB_SUBSAMPLE_STRIDE: u32 = 8;
+    let needs_wb_analysis = cb.wb_preset != CbWbPreset::None || options.enable_auto_wb;
 
-    if cb.wb_preset != CbWbPreset::None {
-        let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
-        let wb_points = analyze_wb_points(&subsampled, decoded.channels);
-        let offsets = calculate_wb_preset_offsets(cb.wb_preset, &wb_points, cb.film_character);
-        let strength = options.auto_wb_strength;
-        let scaled_offsets = [
-            offsets[0] / 255.0 * strength,
-            offsets[1] / 255.0 * strength,
-            offsets[2] / 255.0 * strength,
-        ];
-        apply_gains(
-            &ctx,
-            &gpu_image,
-            [1.0, 1.0, 1.0],
-            [-scaled_offsets[0], -scaled_offsets[1], -scaled_offsets[2]],
-            pixel_count,
-        )?;
-    } else if options.enable_auto_wb {
-        // Use subsampled download for WB analysis (64x smaller transfer for stride=8)
-        let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
+    if needs_wb_analysis {
+        // Flush pending commands before downloading subsampled data
+        batch.flush();
 
-        let multipliers = match options.auto_wb_mode {
-            AutoWbMode::GrayPixel => crate::auto_adjust::compute_wb_multipliers_gray_pixel(
-                &subsampled,
-                decoded.channels,
-                options.auto_wb_strength,
-            ),
-            AutoWbMode::Average => crate::auto_adjust::compute_wb_multipliers_avg(
-                &subsampled,
-                decoded.channels,
-                options.auto_wb_strength,
-            ),
-            AutoWbMode::Percentile => crate::auto_adjust::compute_wb_multipliers_percentile(
-                &subsampled,
-                decoded.channels,
-                options.auto_wb_strength,
-                98.0,
-            ),
-        };
+        if cb.wb_preset != CbWbPreset::None {
+            let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
+            let wb_points = analyze_wb_points(&subsampled, decoded.channels);
+            let offsets = calculate_wb_preset_offsets(cb.wb_preset, &wb_points, cb.film_character);
+            let strength = options.auto_wb_strength;
+            let scaled_offsets = [
+                offsets[0] / 255.0 * strength,
+                offsets[1] / 255.0 * strength,
+                offsets[2] / 255.0 * strength,
+            ];
+            apply_gains_batched(
+                &mut batch,
+                &ctx,
+                &gpu_image,
+                [1.0, 1.0, 1.0],
+                [-scaled_offsets[0], -scaled_offsets[1], -scaled_offsets[2]],
+                pixel_count,
+            )?;
+        } else if options.enable_auto_wb {
+            let subsampled = download_subsampled(&ctx, &gpu_image, WB_SUBSAMPLE_STRIDE)?;
 
-        // Apply multipliers on GPU (gains with zero offsets)
-        apply_gains(
-            &ctx,
-            &gpu_image,
-            multipliers,
-            [0.0, 0.0, 0.0],
-            pixel_count,
-        )?;
+            let multipliers = match options.auto_wb_mode {
+                AutoWbMode::GrayPixel => crate::auto_adjust::compute_wb_multipliers_gray_pixel(
+                    &subsampled,
+                    decoded.channels,
+                    options.auto_wb_strength,
+                ),
+                AutoWbMode::Average => crate::auto_adjust::compute_wb_multipliers_avg(
+                    &subsampled,
+                    decoded.channels,
+                    options.auto_wb_strength,
+                ),
+                AutoWbMode::Percentile => crate::auto_adjust::compute_wb_multipliers_percentile(
+                    &subsampled,
+                    decoded.channels,
+                    options.auto_wb_strength,
+                    98.0,
+                ),
+            };
+
+            // Apply multipliers on GPU (gains with zero offsets)
+            apply_gains_batched(
+                &mut batch,
+                &ctx,
+                &gpu_image,
+                multipliers,
+                [0.0, 0.0, 0.0],
+                pixel_count,
+            )?;
+        }
     }
 
-    // Step 3: Apply CB layers (WB temp/tint, color gamma, tonal adjustments, toning).
+    // ========================================================================
+    // Step 3: Apply CB layers (WB temp/tint, color gamma, tonal adjustments, toning)
+    // ========================================================================
     let brightness_gamma = 1.0 / (1.0 + cb.brightness * 0.02);
     let exposure_factor = 1.0 / (1.0 + cb.exposure * 0.02);
     let color_offsets = [
@@ -212,7 +319,12 @@ pub fn process_image_cb_gpu(
         flags: [wb_method, layer_order, pixel_count, apply_flags],
     };
 
-    apply_cb_layers(&ctx, &gpu_image, &layer_params, pixel_count)?;
+    apply_cb_layers_batched(&mut batch, &ctx, &gpu_image, &layer_params, pixel_count)?;
+
+    // ========================================================================
+    // FINAL SYNC: Submit all remaining commands before download
+    // ========================================================================
+    batch.finish();
 
     // Download final output.
     let result_data = gpu_image.download()?;
@@ -228,7 +340,11 @@ pub fn process_image_cb_gpu(
     })
 }
 
-/// Execute the full processing pipeline on GPU.
+/// Execute the full processing pipeline on GPU with batched command submission.
+///
+/// This is optimized to batch GPU commands and only synchronize when data needs
+/// to be read back (for histogram analysis, auto-WB, auto-color, auto-exposure).
+/// This can provide 2-4x speedup compared to syncing after every operation.
 fn execute_pipeline(
     ctx: &GpuContext,
     image: &mut GpuImage,
@@ -239,24 +355,38 @@ fn execute_pipeline(
     let pixel_count = image.pixel_count();
 
     // Stage 1: Base estimation (done on CPU, we just need the results)
-    // The base estimation involves statistical analysis that's more suited to CPU
-    // We use the pre-computed base from options or compute it here if needed
     let base = options
         .base_estimation
         .clone()
         .unwrap_or_else(|| estimate_base_cpu(decoded, options));
 
+    // Create command batch for accumulating GPU operations
+    let mut batch = CommandBatch::new(ctx, "pipeline_batch");
+
+    // ========================================================================
+    // BATCH 1: Inversion + Shadow lift + Highlight compression
+    // These operations don't need data readback, so we can batch them.
+    // ========================================================================
+
     // Stage 2: Inversion (always applied for negatives)
-    apply_inversion(ctx, image, &base, &options.inversion_mode, pixel_count)?;
+    apply_inversion_batched(
+        &mut batch,
+        ctx,
+        image,
+        &base,
+        &options.inversion_mode,
+        pixel_count,
+    )?;
 
     // Stage 3: Shadow lift (if configured)
     if options.shadow_lift_mode != ShadowLiftMode::None {
-        apply_shadow_lift(ctx, image, options, pixel_count)?;
+        apply_shadow_lift_batched(&mut batch, ctx, image, options, pixel_count)?;
     }
 
     // Stage 4: Highlight compression (if configured)
     if options.highlight_compression < 1.0 {
-        apply_highlight_compression(
+        apply_highlight_compression_batched(
+            &mut batch,
             ctx,
             image,
             0.9, // Default threshold
@@ -265,9 +395,14 @@ fn execute_pipeline(
         )?;
     }
 
-    // Stage 5: Auto-levels (if enabled)
+    // ========================================================================
+    // SYNC POINT: Auto-levels needs histogram readback
+    // ========================================================================
     if options.enable_auto_levels {
-        // Build histogram on GPU
+        // Flush pending commands before histogram operations
+        batch.flush();
+
+        // Build histogram on GPU (uses its own sync)
         clear_histogram(ctx, histogram)?;
         accumulate_histogram(ctx, image, histogram)?;
 
@@ -278,56 +413,88 @@ fn execute_pipeline(
         let (gains, offsets) =
             compute_auto_levels_gains(&hist_r, &hist_g, &hist_b, options.auto_levels_clip_percent);
 
-        // Apply gains on GPU
-        apply_gains(ctx, image, gains, offsets, pixel_count)?;
+        // Apply gains on GPU (into the batch)
+        apply_gains_batched(&mut batch, ctx, image, gains, offsets, pixel_count)?;
     }
 
-    // Stage 6: Film preset base offsets
+    // Stage 6: Film preset base offsets (no sync needed)
     if let Some(ref preset) = options.film_preset {
         if preset.base_offsets != [0.0, 0.0, 0.0] {
-            apply_base_offsets(ctx, image, preset.base_offsets, pixel_count)?;
+            apply_base_offsets_batched(&mut batch, ctx, image, preset.base_offsets, pixel_count)?;
         }
     }
 
-    // Stage 7: Auto white balance (if enabled)
+    // ========================================================================
+    // SYNC POINT: Auto-WB needs image readback
+    // ========================================================================
     if options.enable_auto_wb {
-        // This requires luminance-based pixel selection, do on CPU for simplicity
-        // Could be optimized to GPU later
+        batch.flush(); // Sync before download
+
         let wb_gains = compute_wb_gains_cpu(image, ctx)?;
-        // Apply WB gains with user-specified strength
         let strength = options.auto_wb_strength;
         let adjusted_gains = [
             1.0 + strength * (wb_gains[0] - 1.0),
             1.0 + strength * (wb_gains[1] - 1.0),
             1.0 + strength * (wb_gains[2] - 1.0),
         ];
-        apply_gains(ctx, image, adjusted_gains, [0.0, 0.0, 0.0], pixel_count)?;
+        apply_gains_batched(
+            &mut batch,
+            ctx,
+            image,
+            adjusted_gains,
+            [0.0, 0.0, 0.0],
+            pixel_count,
+        )?;
     }
 
-    // Stage 8: Auto-color (if enabled) - runs before auto-exposure to match CPU pipeline
-    // Uses midtone-weighted means to prioritize neutral midtones
+    // ========================================================================
+    // SYNC POINT: Auto-color needs image readback
+    // ========================================================================
     if options.enable_auto_color {
+        batch.flush(); // Sync before download
+
         let color_gains = compute_auto_color_gains_fullimage(image, ctx, options)?;
-        apply_gains(ctx, image, color_gains, [0.0, 0.0, 0.0], pixel_count)?;
+        apply_gains_batched(
+            &mut batch,
+            ctx,
+            image,
+            color_gains,
+            [0.0, 0.0, 0.0],
+            pixel_count,
+        )?;
     }
 
-    // Stage 9: Auto-exposure (if enabled)
+    // ========================================================================
+    // SYNC POINT: Auto-exposure needs image readback
+    // ========================================================================
     if options.enable_auto_exposure {
+        batch.flush(); // Sync before download
+
         let exposure_gain = compute_exposure_gain_cpu(image, ctx, options)?;
         let strength = options.auto_exposure_strength;
         let adjusted_gain = 1.0 + strength * (exposure_gain - 1.0);
-        apply_exposure(ctx, image, adjusted_gain, 1.0, pixel_count)?;
+        apply_exposure_batched(&mut batch, ctx, image, adjusted_gain, 1.0, pixel_count)?;
     }
+
+    // ========================================================================
+    // BATCH 2: Remaining operations (no sync needed until final download)
+    // ========================================================================
 
     // Stage 10: Manual exposure compensation
     if options.exposure_compensation != 1.0 {
-        apply_exposure(ctx, image, options.exposure_compensation, 1.0, pixel_count)?;
+        apply_exposure_batched(
+            &mut batch,
+            ctx,
+            image,
+            options.exposure_compensation,
+            1.0,
+            pixel_count,
+        )?;
     }
 
     // Stage 12: Color matrix (if film preset has one)
     if !options.skip_color_matrix {
         if let Some(ref preset) = options.film_preset {
-            // Check if matrix is not identity
             let matrix = preset.color_matrix;
             let is_identity = (matrix[0][0] - 1.0).abs() < 0.001
                 && (matrix[1][1] - 1.0).abs() < 0.001
@@ -340,40 +507,46 @@ fn execute_pipeline(
                 && matrix[2][1].abs() < 0.001;
 
             if !is_identity {
-                apply_color_matrix(ctx, image, &matrix, pixel_count)?;
+                apply_color_matrix_batched(&mut batch, ctx, image, &matrix, pixel_count)?;
             }
         }
     }
 
     // Stage 13: Tone curve
     if !options.skip_tone_curve {
-        apply_tone_curve(ctx, image, options, pixel_count)?;
+        apply_tone_curve_batched(&mut batch, ctx, image, options, pixel_count)?;
     }
 
     // Stage 14: HSL adjustments (if scan profile has them)
     if let Some(ref profile) = options.scan_profile {
         if let Some(ref hsl) = profile.hsl_adjustments {
             if hsl.has_adjustments() {
-                apply_hsl_adjustments(ctx, image, hsl, pixel_count)?;
+                apply_hsl_adjustments_batched(&mut batch, ctx, image, hsl, pixel_count)?;
             }
         }
     }
 
-    // Stage 14: Clamp to working range
+    // Stage 15: Clamp to working range
     if !options.no_clip {
-        clamp_working_range(ctx, image, pixel_count)?;
+        clamp_working_range_batched(&mut batch, ctx, image, pixel_count)?;
     }
+
+    // ========================================================================
+    // FINAL SYNC: Submit all remaining commands
+    // ========================================================================
+    batch.finish();
 
     Ok(())
 }
 
 // ============================================================================
-// Individual operation implementations
+// Individual operation implementations (non-batched - kept for testing/debugging)
 // ============================================================================
 
 /// Default headroom for B&W mode: 5% of base value preserved as shadow detail
 const BW_DEFAULT_HEADROOM: f32 = 0.05;
 
+#[allow(dead_code)]
 fn apply_inversion(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -389,6 +562,8 @@ fn apply_inversion(
         (0.0, 0.0)
     };
 
+    // Pre-compute log10 values for log inversion optimization
+    let log10_recip = 1.0 / 10.0_f32.ln();
     let params = InversionParams {
         base_r: base.medians[0],
         base_g: base.medians[1],
@@ -398,6 +573,10 @@ fn apply_inversion(
         bw_headroom: BW_DEFAULT_HEADROOM,
         pixel_count,
         _padding: 0,
+        log_base_r: base.medians[0].max(0.0001).ln() * log10_recip,
+        log_base_g: base.medians[1].max(0.0001).ln() * log10_recip,
+        log_base_b: base.medians[2].max(0.0001).ln() * log10_recip,
+        _padding2: 0.0,
     };
 
     let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "inversion_params");
@@ -414,6 +593,7 @@ fn apply_inversion(
     dispatch_compute(ctx, pipeline, &image.buffer, &uniform_buffer, pixel_count)
 }
 
+#[allow(dead_code)]
 fn apply_cb_inversion(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -442,6 +622,7 @@ fn apply_cb_inversion(
     )
 }
 
+#[allow(dead_code)]
 fn apply_shadow_lift(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -475,6 +656,7 @@ fn apply_shadow_lift(
     )
 }
 
+#[allow(dead_code)]
 fn apply_highlight_compression(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -711,6 +893,7 @@ fn accumulate_histogram(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn apply_gains(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -739,6 +922,7 @@ fn apply_gains(
     )
 }
 
+#[allow(dead_code)]
 fn apply_base_offsets(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -768,6 +952,7 @@ fn apply_base_offsets(
     )
 }
 
+#[allow(dead_code)]
 fn apply_exposure(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -792,6 +977,7 @@ fn apply_exposure(
     )
 }
 
+#[allow(dead_code)]
 fn apply_color_matrix(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -825,6 +1011,7 @@ fn apply_color_matrix(
     )
 }
 
+#[allow(dead_code)]
 fn apply_tone_curve(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -897,6 +1084,7 @@ fn apply_tone_curve(
     dispatch_compute(ctx, pipeline, &image.buffer, &uniform_buffer, pixel_count)
 }
 
+#[allow(dead_code)]
 fn apply_cb_layers(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -913,6 +1101,7 @@ fn apply_cb_layers(
     )
 }
 
+#[allow(dead_code)]
 fn apply_hsl_adjustments(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -963,6 +1152,7 @@ fn apply_hsl_adjustments(
     )
 }
 
+#[allow(dead_code)]
 fn clamp_working_range(
     ctx: &GpuContext,
     image: &GpuImage,
@@ -986,6 +1176,463 @@ fn clamp_working_range(
 }
 
 // ============================================================================
+// Batched operation implementations (use CommandBatch instead of sync per-op)
+// ============================================================================
+
+fn apply_inversion_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    base: &BaseEstimation,
+    mode: &InversionMode,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    // Calculate shadow floors for MaskAware mode
+    let (green_floor, blue_floor) = if let Some(ref mask) = base.mask_profile {
+        let (_red, green, blue) = mask.calculate_shadow_floors();
+        (green, blue)
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Pre-compute log10 values for log inversion optimization
+    let log10_recip = 1.0 / 10.0_f32.ln();
+    let params = InversionParams {
+        base_r: base.medians[0],
+        base_g: base.medians[1],
+        base_b: base.medians[2],
+        green_floor,
+        blue_floor,
+        bw_headroom: BW_DEFAULT_HEADROOM,
+        pixel_count,
+        _padding: 0,
+        log_base_r: base.medians[0].max(0.0001).ln() * log10_recip,
+        log_base_g: base.medians[1].max(0.0001).ln() * log10_recip,
+        log_base_b: base.medians[2].max(0.0001).ln() * log10_recip,
+        _padding2: 0.0,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "inversion_params");
+
+    // Select pipeline based on mode
+    let pipeline = match mode {
+        InversionMode::Linear => &ctx.pipelines.inversion_linear,
+        InversionMode::Logarithmic => &ctx.pipelines.inversion_log,
+        InversionMode::DivideBlend => &ctx.pipelines.inversion_divide,
+        InversionMode::MaskAware => &ctx.pipelines.inversion_mask_aware,
+        InversionMode::BlackAndWhite => &ctx.pipelines.inversion_bw,
+    };
+
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        pipeline,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "inversion_pass",
+    )
+}
+
+fn apply_shadow_lift_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    options: &ConvertOptions,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let lift = match options.shadow_lift_mode {
+        ShadowLiftMode::Fixed => options.shadow_lift_value,
+        ShadowLiftMode::Percentile => {
+            // For percentile mode, we'd need to compute the percentile first
+            // For now, use fixed mode on GPU
+            options.shadow_lift_value
+        }
+        ShadowLiftMode::None => return Ok(()),
+    };
+
+    let params = UtilityParams {
+        param1: lift,
+        param2: 0.0,
+        param3: 0.0,
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "shadow_lift_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.shadow_lift,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "shadow_lift_pass",
+    )
+}
+
+fn apply_highlight_compression_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    threshold: f32,
+    compression: f32,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = UtilityParams {
+        param1: threshold,
+        param2: compression,
+        param3: 0.0,
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "highlight_compress_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.highlight_compress,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "highlight_compress_pass",
+    )
+}
+
+fn apply_gains_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    gains: [f32; 3],
+    offsets: [f32; 3],
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = GainParams {
+        gain_r: gains[0],
+        gain_g: gains[1],
+        gain_b: gains[2],
+        offset_r: offsets[0],
+        offset_g: offsets[1],
+        offset_b: offsets[2],
+        pixel_count,
+        _padding: 0,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "gain_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.apply_gains,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "apply_gains_pass",
+    )
+}
+
+fn apply_base_offsets_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    offsets: [f32; 3],
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    // Reuse apply_gains with gain=1.0 and negated offsets
+    // apply_gains does (value - offset) * gain, so we negate to get value + offset
+    let gain_params = GainParams {
+        gain_r: 1.0,
+        gain_g: 1.0,
+        gain_b: 1.0,
+        offset_r: -offsets[0], // Negate because apply_gains does (value - offset) * gain
+        offset_g: -offsets[1],
+        offset_b: -offsets[2],
+        pixel_count,
+        _padding: 0,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &gain_params, "base_offset_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.apply_gains,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "base_offsets_pass",
+    )
+}
+
+fn apply_exposure_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    multiplier: f32,
+    max_value: f32,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = UtilityParams {
+        param1: multiplier,
+        param2: max_value,
+        param3: 0.0,
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "exposure_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.exposure_multiply,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "exposure_pass",
+    )
+}
+
+fn apply_color_matrix_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    matrix: &[[f32; 3]; 3],
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = ColorMatrixParams {
+        m00: matrix[0][0],
+        m01: matrix[0][1],
+        m02: matrix[0][2],
+        _pad0: 0.0,
+        m10: matrix[1][0],
+        m11: matrix[1][1],
+        m12: matrix[1][2],
+        _pad1: 0.0,
+        m20: matrix[2][0],
+        m21: matrix[2][1],
+        m22: matrix[2][2],
+        _pad2: 0.0,
+        pixel_count,
+        _padding: [0, 0, 0],
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "color_matrix_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.color_matrix,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "color_matrix_pass",
+    )
+}
+
+fn apply_tone_curve_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    options: &ConvertOptions,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    // Get tone curve from film preset if available
+    let curve_params = options.film_preset.as_ref().map(|p| &p.tone_curve);
+
+    let (pipeline, params) = match curve_params {
+        Some(curve) => {
+            // curve_type is a String: "linear", "neutral", "scurve", "asymmetric"
+            match curve.curve_type.as_str() {
+                "linear" => return Ok(()), // No-op
+                "scurve" | "neutral" | "s-curve" => {
+                    let p = GpuToneCurveParams {
+                        strength: curve.strength,
+                        toe_strength: 0.0,
+                        toe_length: 0.0,
+                        shoulder_strength: 0.0,
+                        shoulder_start: 0.0,
+                        pixel_count,
+                        _padding: [0, 0],
+                    };
+                    (&ctx.pipelines.tone_curve_scurve, p)
+                }
+                "asymmetric" => {
+                    let p = GpuToneCurveParams {
+                        strength: curve.strength,
+                        toe_strength: curve.toe_strength,
+                        toe_length: curve.toe_length,
+                        shoulder_strength: curve.shoulder_strength,
+                        shoulder_start: curve.shoulder_start,
+                        pixel_count,
+                        _padding: [0, 0],
+                    };
+                    (&ctx.pipelines.tone_curve_asymmetric, p)
+                }
+                _ => {
+                    // Default to S-curve for unknown types
+                    let p = GpuToneCurveParams {
+                        strength: curve.strength,
+                        toe_strength: 0.0,
+                        toe_length: 0.0,
+                        shoulder_strength: 0.0,
+                        shoulder_start: 0.0,
+                        pixel_count,
+                        _padding: [0, 0],
+                    };
+                    (&ctx.pipelines.tone_curve_scurve, p)
+                }
+            }
+        }
+        None => {
+            // Default neutral S-curve
+            let p = GpuToneCurveParams {
+                strength: 0.3,
+                toe_strength: 0.0,
+                toe_length: 0.0,
+                shoulder_strength: 0.0,
+                shoulder_start: 0.0,
+                pixel_count,
+                _padding: [0, 0],
+            };
+            (&ctx.pipelines.tone_curve_scurve, p)
+        }
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "tone_curve_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        pipeline,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "tone_curve_pass",
+    )
+}
+
+fn apply_hsl_adjustments_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    hsl: &crate::models::HslAdjustments,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    // HslAdjustments has arrays: hue[8], saturation[8], luminance[8]
+    // Order: [R, O, Y, G, A, B, P, M]
+    // Split into vec4 pairs for WGSL alignment
+    let params = HslAdjustParams {
+        hue_adj_0: [hsl.hue[0], hsl.hue[1], hsl.hue[2], hsl.hue[3]],
+        hue_adj_1: [hsl.hue[4], hsl.hue[5], hsl.hue[6], hsl.hue[7]],
+        sat_adj_0: [
+            hsl.saturation[0],
+            hsl.saturation[1],
+            hsl.saturation[2],
+            hsl.saturation[3],
+        ],
+        sat_adj_1: [
+            hsl.saturation[4],
+            hsl.saturation[5],
+            hsl.saturation[6],
+            hsl.saturation[7],
+        ],
+        lum_adj_0: [
+            hsl.luminance[0],
+            hsl.luminance[1],
+            hsl.luminance[2],
+            hsl.luminance[3],
+        ],
+        lum_adj_1: [
+            hsl.luminance[4],
+            hsl.luminance[5],
+            hsl.luminance[6],
+            hsl.luminance[7],
+        ],
+        pixel_count,
+        _padding: [0, 0, 0],
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "hsl_adjust_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.hsl_adjust,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "hsl_adjust_pass",
+    )
+}
+
+fn clamp_working_range_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = UtilityParams {
+        param1: 0.0,
+        param2: 0.0,
+        param3: 0.0,
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "clamp_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.clamp_range,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "clamp_range_pass",
+    )
+}
+
+fn apply_cb_inversion_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    analysis: &crate::models::CbHistogramAnalysis,
+    is_negative: bool,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let params = CbInversionParams {
+        white_r: analysis.red.white_point,
+        black_r: analysis.red.black_point,
+        white_g: analysis.green.white_point,
+        black_g: analysis.green.black_point,
+        white_b: analysis.blue.white_point,
+        black_b: analysis.blue.black_point,
+        is_negative: if is_negative { 1 } else { 0 },
+        pixel_count,
+    };
+
+    let uniform_buffer = create_uniform_buffer(&ctx.device, &params, "cb_inversion_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.cb_inversion,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "cb_inversion_pass",
+    )
+}
+
+fn apply_cb_layers_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    image: &GpuImage,
+    params: &CbLayerParams,
+    pixel_count: u32,
+) -> Result<(), GpuError> {
+    let uniform_buffer = create_uniform_buffer(&ctx.device, params, "cb_layer_params");
+    dispatch_compute_batched(
+        batch,
+        ctx,
+        &ctx.pipelines.cb_layers,
+        &image.buffer,
+        &uniform_buffer,
+        pixel_count,
+        "cb_layers_pass",
+    )
+}
+
+// ============================================================================
 // Helper functions
 // ============================================================================
 
@@ -998,6 +1645,7 @@ const MAX_PIXELS_PER_DISPATCH: u32 = MAX_WORKGROUPS_PER_DIM * WORKGROUP_SIZE;
 
 /// Generic compute dispatch for storage + uniform pattern
 /// Handles large images by splitting into multiple dispatches when needed
+#[allow(dead_code)]
 fn dispatch_compute(
     ctx: &GpuContext,
     pipeline: &wgpu::ComputePipeline,
@@ -1106,6 +1754,57 @@ fn dispatch_compute(
         ctx.submit_and_wait(encoder);
     }
 
+    Ok(())
+}
+
+/// Record a compute dispatch into a command batch without submitting.
+/// Uses the cached bind group layout from GpuContext for efficiency.
+fn dispatch_compute_batched(
+    batch: &mut CommandBatch,
+    ctx: &GpuContext,
+    pipeline: &wgpu::ComputePipeline,
+    storage_buffer: &wgpu::Buffer,
+    uniform_buffer: &wgpu::Buffer,
+    pixel_count: u32,
+    label: &'static str,
+) -> Result<(), GpuError> {
+    // Use the cached bind group layout
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout: &ctx.pipelines.storage_uniform_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: storage_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
+    let total_workgroups = pixel_count.div_ceil(WORKGROUP_SIZE);
+
+    // Calculate 2D dispatch dimensions for large images
+    let (workgroups_x, workgroups_y) = if total_workgroups <= MAX_WORKGROUPS_PER_DIM {
+        (total_workgroups, 1)
+    } else {
+        let side = ((total_workgroups as f64).sqrt().ceil() as u32).min(MAX_WORKGROUPS_PER_DIM);
+        let y = total_workgroups.div_ceil(side);
+
+        if y > MAX_WORKGROUPS_PER_DIM {
+            return Err(GpuError::Other(format!(
+                "Image too large: {} pixels requires {} workgroups, max supported is {}",
+                pixel_count,
+                total_workgroups,
+                MAX_WORKGROUPS_PER_DIM as u64 * MAX_WORKGROUPS_PER_DIM as u64
+            )));
+        }
+        (side, y)
+    };
+
+    batch.dispatch(pipeline, &bind_group, workgroups_x, workgroups_y, label);
     Ok(())
 }
 
