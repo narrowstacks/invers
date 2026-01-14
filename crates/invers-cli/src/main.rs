@@ -6,22 +6,21 @@
 //! - `convert`: Convert a single negative image to positive
 //! - `batch`: Process multiple images with shared settings
 //! - `analyze`: Analyze an image to estimate film base color
-//! - `preset`: Manage film presets (list, show, create)
 //! - `init`: Initialize user configuration directory
 //!
 //! Debug-only commands (available in debug builds):
 //! - `diagnose`: Compare conversion against third-party software
 //! - `test-params`: Optimize parameters against a reference
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
+use std::io;
 use std::path::PathBuf;
 
 mod commands;
 
-use commands::{
-    cmd_analyze, cmd_batch, cmd_convert, cmd_init, cmd_preset_create, cmd_preset_list,
-    cmd_preset_show,
-};
+use commands::{cmd_analyze, cmd_batch, cmd_convert, cmd_init};
+use invers_cli::WhiteBalance;
 
 #[cfg(debug_assertions)]
 use commands::{cmd_diagnose, cmd_test_params};
@@ -29,6 +28,7 @@ use commands::{cmd_diagnose, cmd_test_params};
 #[derive(Parser)]
 #[command(name = "invers")]
 #[command(version, about = "Film negative to positive converter", long_about = None)]
+#[command(after_help = "Use --help with a subcommand for more options. Advanced/research flags are hidden by default.")]
 struct Cli {
     /// Show the path to the config file being used (if any) and exit
     #[arg(long)]
@@ -43,88 +43,90 @@ struct Cli {
 // =============================================================================
 
 /// Common pipeline arguments shared between Convert and Batch commands
+/// These are advanced/research options hidden from default help output
 #[derive(Args, Clone, Debug)]
 pub struct PipelineArgs {
     /// Pipeline mode: "legacy" (default), "research", or "cb"
     /// Research pipeline uses density balance BEFORE inversion for better color accuracy
     /// CB pipeline uses curve-based processing for film-like rendering
-    #[arg(long, value_name = "MODE", default_value = "legacy")]
+    #[arg(long, value_name = "MODE", default_value = "legacy", hide = true)]
     pub pipeline: String,
 
     /// [RESEARCH] Density balance red exponent (R^db_r)
     /// Typical range: 0.8-1.3, default 1.05
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(long, value_name = "FLOAT", hide = true)]
     pub db_red: Option<f32>,
 
     /// [RESEARCH] Density balance blue exponent (B^db_b)
     /// Typical range: 0.7-1.1, default 0.90
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(long, value_name = "FLOAT", hide = true)]
     pub db_blue: Option<f32>,
 
     /// [RESEARCH] Neutral point ROI for auto-calculating density balance (x,y,width,height)
     /// Sample a known gray area to auto-compute density balance
-    #[arg(long, value_name = "X,Y,W,H")]
+    #[arg(long, value_name = "X,Y,W,H", hide = true)]
     pub neutral_roi: Option<String>,
 
     /// [CB] Tone profile preset (standard, logarithmic, log-rich, log-flat, linear,
     /// linear-gamma, linear-flat, linear-deep, all-soft, all-hard, highlight-hard,
     /// highlight-soft, shadow-hard, shadow-soft, auto)
-    #[arg(long, value_name = "PROFILE")]
+    #[arg(long, value_name = "PROFILE", hide = true)]
     pub cb_tone: Option<String>,
 
     /// [CB] Enhanced profile/LUT (none, natural, frontier, crystal, pakon)
-    #[arg(long, value_name = "PROFILE")]
+    #[arg(long, value_name = "PROFILE", hide = true)]
     pub cb_lut: Option<String>,
 
     /// [CB] Color model (none, basic, frontier, noritsu, bw)
-    #[arg(long, value_name = "MODEL")]
+    #[arg(long, value_name = "MODEL", hide = true)]
     pub cb_color: Option<String>,
 
     /// [CB] Film character (none, generic, kodak, fuji, cinestill-50d, cinestill-800t)
-    #[arg(long, value_name = "CHARACTER")]
+    #[arg(long, value_name = "CHARACTER", hide = true)]
     pub cb_film: Option<String>,
 
     /// [CB] White balance preset (none, auto, neutral, warm, cool, mix, standard, kodak, fuji, cine-t, cine-d)
-    #[arg(long, value_name = "PRESET")]
+    #[arg(long, value_name = "PRESET", hide = true)]
     pub cb_wb: Option<String>,
 }
 
 /// Debug-only arguments (only available in debug builds)
+/// These flags are hidden from default help output
 #[cfg(debug_assertions)]
 #[derive(Args, Clone, Debug, Default)]
 pub struct DebugArgs {
     /// [DEBUG] Skip tone curve application
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub no_tonecurve: bool,
 
     /// [DEBUG] Skip color matrix correction
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub no_colormatrix: bool,
 
     /// [DEBUG] Inversion mode override: "mask-aware", "linear", "log", "divide-blend", or "bw"
-    #[arg(long, value_name = "MODE")]
+    #[arg(long, value_name = "MODE", hide = true)]
     pub inversion: Option<String>,
 
     /// [DEBUG] Enable automatic white balance correction
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub auto_wb: bool,
 
     /// [DEBUG] Strength of auto white balance correction (0.0-1.0)
-    #[arg(long, value_name = "FLOAT", default_value = "1.0")]
+    #[arg(long, value_name = "FLOAT", default_value = "1.0", hide = true)]
     pub auto_wb_strength: f32,
 
     /// [DEBUG] Auto white balance mode: "gray", "avg", or "pct" (percentile-based)
     /// "pct" uses 98th percentile (robust white patch) - robust for varied scenes
-    #[arg(long, value_name = "MODE", default_value = "gray")]
+    #[arg(long, value_name = "MODE", default_value = "gray", hide = true)]
     pub auto_wb_mode: String,
 
     /// [DEBUG] Tone curve type: "neutral", "log", "cinematic", "linear", "asymmetric"
     /// "log"/"cinematic" provides cinematic log-style tone profile
-    #[arg(long, value_name = "TYPE")]
+    #[arg(long, value_name = "TYPE", hide = true)]
     pub tone_curve: Option<String>,
 
     /// [DEBUG] Enable debug output (detailed pipeline parameters)
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub debug: bool,
 }
 
@@ -161,35 +163,36 @@ impl DebugArgs {
 #[derive(Subcommand)]
 enum Commands {
     /// Convert negative image(s) to positive
+    #[command(after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features.")]
     Convert {
         /// Input file or directory
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
         /// Output directory or file path
-        #[arg(short, long, value_name = "PATH")]
+        #[arg(short, long, value_name = "PATH", help_heading = "Output Options")]
         out: Option<PathBuf>,
 
-        /// Film preset file
-        #[arg(short, long, value_name = "FILE")]
-        preset: Option<PathBuf>,
-
-        /// Scan profile file
-        #[arg(short, long, value_name = "FILE")]
-        scan_profile: Option<PathBuf>,
-
         /// Export format (tiff16 or dng)
-        #[arg(long, value_name = "FORMAT", default_value = "tiff16")]
+        #[arg(long, value_name = "FORMAT", default_value = "tiff16", help_heading = "Output Options")]
         export: String,
 
+        /// White balance preset: auto (default), none, neutral, warm, cool
+        #[arg(long, short = 'w', value_enum, default_value_t = WhiteBalance::Auto, help_heading = "Processing Options")]
+        white_balance: WhiteBalance,
+
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
-        #[arg(long, value_name = "FLOAT", default_value = "1.0")]
+        #[arg(long, value_name = "FLOAT", default_value = "1.0", help_heading = "Processing Options")]
         exposure: f32,
 
         /// Manual base RGB values (comma-separated: R,G,B)
         /// Use 'invers analyze' to determine these values, then reuse across a roll
-        #[arg(long, value_name = "R,G,B")]
+        #[arg(long, value_name = "R,G,B", help_heading = "Processing Options")]
         base: Option<String>,
+
+        /// Force black and white conversion mode
+        #[arg(long, help_heading = "Processing Options")]
+        bw: bool,
 
         /// Suppress non-essential output (timing, progress messages)
         #[arg(long)]
@@ -252,6 +255,7 @@ enum Commands {
     /// By default, assumes all images are from the same roll of film and shares
     /// the base color estimation from the first image across all files.
     /// Use --per-image to estimate base for each file independently.
+    #[command(after_help = "Advanced/research flags are available but hidden. Use --pipeline, --cb-*, --db-* for experimental features.")]
     Batch {
         /// Input files or directories
         #[arg(value_name = "INPUTS")]
@@ -263,38 +267,38 @@ enum Commands {
 
         /// Base estimation file (JSON from 'analyze --save')
         /// Takes priority over first-image estimation
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", help_heading = "Base Estimation")]
         base_from: Option<PathBuf>,
 
         /// Manual base RGB values (comma-separated: R,G,B)
         /// Use 'invers analyze' to determine these values
-        #[arg(long, value_name = "R,G,B")]
+        #[arg(long, value_name = "R,G,B", help_heading = "Base Estimation")]
         base: Option<String>,
 
         /// Estimate base per-image instead of sharing from first image
         /// By default, batch assumes all images are from the same roll
-        #[arg(long)]
+        #[arg(long, help_heading = "Base Estimation")]
         per_image: bool,
 
-        /// Film preset file
-        #[arg(short, long, value_name = "FILE")]
-        preset: Option<PathBuf>,
-
-        /// Scan profile file
-        #[arg(short, long, value_name = "FILE")]
-        scan_profile: Option<PathBuf>,
-
         /// Export format (tiff16 or dng)
-        #[arg(long, value_name = "FORMAT", default_value = "tiff16")]
+        #[arg(long, value_name = "FORMAT", default_value = "tiff16", help_heading = "Output Options")]
         export: String,
 
+        /// Output directory
+        #[arg(short, long, value_name = "DIR", help_heading = "Output Options")]
+        out: Option<PathBuf>,
+
+        /// White balance preset: auto (default), none, neutral, warm, cool
+        #[arg(long, short = 'w', value_enum, default_value_t = WhiteBalance::Auto, help_heading = "Processing Options")]
+        white_balance: WhiteBalance,
+
         /// Exposure compensation multiplier (1.0 = no change, >1.0 = brighter)
-        #[arg(long, value_name = "FLOAT", default_value = "1.0")]
+        #[arg(long, value_name = "FLOAT", default_value = "1.0", help_heading = "Processing Options")]
         exposure: f32,
 
-        /// Output directory
-        #[arg(short, long, value_name = "DIR")]
-        out: Option<PathBuf>,
+        /// Force black and white conversion mode
+        #[arg(long, help_heading = "Processing Options")]
+        bw: bool,
 
         /// Number of parallel threads
         #[arg(short = 'j', long, value_name = "N")]
@@ -312,6 +316,10 @@ enum Commands {
         #[arg(long)]
         cpu: bool,
 
+        /// Dry run: list files that would be processed without actually processing
+        #[arg(long)]
+        dry_run: bool,
+
         /// Pipeline and processing options
         #[command(flatten)]
         pipeline_args: PipelineArgs,
@@ -322,12 +330,6 @@ enum Commands {
         debug_args: DebugArgs,
     },
 
-    /// Manage film presets
-    Preset {
-        #[command(subcommand)]
-        action: PresetAction,
-    },
-
     /// Initialize user configuration directory with default presets
     ///
     /// Copies default configuration and preset files to ~/invers/.
@@ -336,6 +338,18 @@ enum Commands {
         /// Force overwrite of existing files
         #[arg(long)]
         force: bool,
+    },
+
+    /// Generate shell completions for bash, zsh, fish, or powershell
+    ///
+    /// To install completions, pipe the output to the appropriate file:
+    ///   bash: invers completions bash > ~/.bash_completion.d/invers
+    ///   zsh:  invers completions zsh > ~/.zfunc/_invers
+    ///   fish: invers completions fish > ~/.config/fish/completions/invers.fish
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 
     // === Debug-only commands (only available in debug builds) ===
@@ -436,32 +450,6 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
-enum PresetAction {
-    /// List available presets
-    List {
-        /// Directory to list presets from
-        #[arg(short, long, value_name = "DIR")]
-        dir: Option<PathBuf>,
-    },
-
-    /// Show details of a preset
-    Show {
-        /// Preset name or file path
-        preset: String,
-    },
-
-    /// Create a new preset template
-    Create {
-        /// Output file path
-        output: PathBuf,
-
-        /// Preset name
-        #[arg(short, long)]
-        name: String,
-    },
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -488,14 +476,14 @@ fn main() {
         Commands::Convert {
             input,
             out,
-            preset,
-            scan_profile,
             export,
+            white_balance,
             exposure,
             base,
             silent,
             cpu,
             verbose,
+            bw,
             pipeline_args,
             #[cfg(debug_assertions)]
             debug_args,
@@ -507,9 +495,8 @@ fn main() {
             cmd_convert(
                 input,
                 out,
-                preset,
-                scan_profile,
                 export,
+                white_balance,
                 debug_args.no_tonecurve,
                 debug_args.no_colormatrix,
                 exposure,
@@ -532,6 +519,7 @@ fn main() {
                 pipeline_args.cb_color,
                 pipeline_args.cb_film,
                 pipeline_args.cb_wb,
+                bw,
             )
         }
 
@@ -551,15 +539,16 @@ fn main() {
             base_from,
             base,
             per_image,
-            preset,
-            scan_profile,
             export,
+            white_balance,
             exposure,
             out,
             threads,
             silent,
             verbose,
             cpu,
+            dry_run,
+            bw,
             pipeline_args,
             #[cfg(debug_assertions)]
             debug_args,
@@ -574,15 +563,15 @@ fn main() {
                 base_from,
                 base,
                 per_image,
-                preset,
-                scan_profile,
                 export,
+                white_balance,
                 exposure,
                 out,
                 threads,
                 silent,
                 verbose,
                 cpu,
+                dry_run,
                 debug_args.no_tonecurve,
                 debug_args.no_colormatrix,
                 debug_args.inversion,
@@ -600,16 +589,17 @@ fn main() {
                 pipeline_args.cb_color,
                 pipeline_args.cb_film,
                 pipeline_args.cb_wb,
+                bw,
             )
         }
 
-        Commands::Preset { action } => match action {
-            PresetAction::List { dir } => cmd_preset_list(dir),
-            PresetAction::Show { preset } => cmd_preset_show(preset),
-            PresetAction::Create { output, name } => cmd_preset_create(output, name),
-        },
-
         Commands::Init { force } => cmd_init(force),
+
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "invers", &mut io::stdout());
+            Ok(())
+        }
 
         #[cfg(debug_assertions)]
         Commands::Diagnose {

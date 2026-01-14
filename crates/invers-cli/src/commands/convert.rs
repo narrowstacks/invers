@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use invers_cli::{determine_output_path, parse_base_rgb, process_single_image, ProcessingParams};
+use invers_cli::{
+    determine_output_path, parse_base_rgb, process_single_image, ProcessingParams, WhiteBalance,
+};
 
 /// Execute the convert command for a single image.
 ///
@@ -13,7 +15,6 @@ use invers_cli::{determine_output_path, parse_base_rgb, process_single_image, Pr
 /// - Automatic or manual base estimation
 /// - B&W auto-detection (switches to BlackAndWhite inversion mode)
 /// - Pipeline mode selection (Legacy, Research, or CB)
-/// - Film preset and scan profile application
 /// - Export to TIFF16 or Linear DNG
 ///
 /// # Returns
@@ -23,9 +24,8 @@ use invers_cli::{determine_output_path, parse_base_rgb, process_single_image, Pr
 pub fn cmd_convert(
     input: PathBuf,
     out: Option<PathBuf>,
-    preset: Option<PathBuf>,
-    scan_profile_path: Option<PathBuf>,
     export: String,
+    white_balance: WhiteBalance,
     no_tonecurve: bool,
     no_colormatrix: bool,
     exposure: f32,
@@ -50,6 +50,8 @@ pub fn cmd_convert(
     cb_color: Option<String>,
     cb_film: Option<String>,
     cb_wb: Option<String>,
+    // B&W conversion flag
+    bw: bool,
 ) -> Result<(), String> {
     let start_time = Instant::now();
 
@@ -114,31 +116,6 @@ pub fn cmd_convert(
         );
     }
 
-    // Load scan profile if provided
-    let scan_profile = if let Some(profile_path) = scan_profile_path {
-        if !silent {
-            println!("Loading scan profile from {}...", profile_path.display());
-        }
-        let profile = invers_core::presets::load_scan_profile(&profile_path)?;
-        if !silent {
-            println!("  Profile: {} ({})", profile.name, profile.source_type);
-            if let Some(ref hsl) = profile.hsl_adjustments {
-                if hsl.has_adjustments() {
-                    println!("  HSL adjustments: enabled");
-                }
-            }
-            if let Some(gamma) = profile.default_gamma {
-                println!(
-                    "  Default gamma: [{:.2}, {:.2}, {:.2}]",
-                    gamma[0], gamma[1], gamma[2]
-                );
-            }
-        }
-        Some(profile)
-    } else {
-        None
-    };
-
     // Parse manual base values or auto-estimate using default method
     let base_estimation = if let Some(base_str) = base {
         // Parse manual base values (R,G,B format)
@@ -179,21 +156,18 @@ pub fn cmd_convert(
         estimation
     };
 
-    // Load film preset if provided
-    let film_preset = if let Some(preset_path) = preset {
-        if !silent {
-            println!("Loading film preset from {}...", preset_path.display());
-        }
-        Some(invers_core::presets::load_film_preset(&preset_path)?)
-    } else {
-        None
-    };
-
     // Prepare output path
     let output_path = determine_output_path(&input, &out, &export)?;
     if !silent {
         println!("Output: {}", output_path.display());
     }
+
+    // Override inversion mode if --bw flag is set
+    let effective_inversion = if bw {
+        Some("bw".to_string())
+    } else {
+        inversion.clone()
+    };
 
     // Build processing params
     let params = ProcessingParams {
@@ -203,6 +177,7 @@ pub fn cmd_convert(
         silent,
         verbose,
         debug,
+        white_balance,
         pipeline: pipeline.clone(),
         db_red,
         db_blue,
@@ -214,7 +189,7 @@ pub fn cmd_convert(
         cb_wb: cb_wb.clone(),
         no_tonecurve,
         no_colormatrix,
-        inversion: inversion.clone(),
+        inversion: effective_inversion,
         auto_wb,
         auto_wb_strength,
         auto_wb_mode: auto_wb_mode.clone(),
@@ -225,8 +200,8 @@ pub fn cmd_convert(
     process_single_image(
         decoded,
         base_estimation,
-        film_preset,
-        scan_profile,
+        None, // No film preset
+        None, // No scan profile
         &output_path,
         &params,
     )?;

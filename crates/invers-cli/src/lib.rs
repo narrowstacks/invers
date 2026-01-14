@@ -5,6 +5,83 @@
 
 use std::path::{Path, PathBuf};
 
+/// White balance preset for CLI interface.
+///
+/// This provides a unified, user-friendly interface for white balance settings,
+/// consolidating the various auto_wb flags into a single enum.
+#[derive(Clone, Debug, Default, clap::ValueEnum)]
+pub enum WhiteBalance {
+    /// Auto white balance using average/gray world assumption (default)
+    #[default]
+    Auto,
+    /// No white balance adjustment
+    None,
+    /// Neutral/gray world assumption with full strength
+    Neutral,
+    /// Warmer tones (reduced blue, slight red boost)
+    Warm,
+    /// Cooler tones (reduced red, slight blue boost)
+    Cool,
+}
+
+/// White balance settings derived from the unified WhiteBalance preset.
+#[derive(Clone, Debug)]
+pub struct WhiteBalanceSettings {
+    /// Whether auto white balance is enabled
+    pub enabled: bool,
+    /// Strength of the white balance correction (0.0-1.0)
+    pub strength: f32,
+    /// The auto WB mode to use
+    pub mode: &'static str,
+    /// Color temperature bias (positive = warmer, negative = cooler)
+    pub temperature_bias: f32,
+}
+
+impl WhiteBalance {
+    /// Convert the unified WhiteBalance preset to internal settings.
+    ///
+    /// Returns settings for:
+    /// - `Auto`: Enable auto WB with strength 0.5, average mode
+    /// - `None`: Disable auto WB
+    /// - `Neutral`: Enable auto WB with "gray" mode for neutral tones
+    /// - `Warm`: Enable auto WB with warm bias (reduce blue)
+    /// - `Cool`: Enable auto WB with cool bias (reduce red)
+    pub fn to_settings(&self) -> WhiteBalanceSettings {
+        match self {
+            WhiteBalance::Auto => WhiteBalanceSettings {
+                enabled: true,
+                strength: 0.5,
+                mode: "avg",
+                temperature_bias: 0.0,
+            },
+            WhiteBalance::None => WhiteBalanceSettings {
+                enabled: false,
+                strength: 0.0,
+                mode: "avg",
+                temperature_bias: 0.0,
+            },
+            WhiteBalance::Neutral => WhiteBalanceSettings {
+                enabled: true,
+                strength: 1.0,
+                mode: "gray",
+                temperature_bias: 0.0,
+            },
+            WhiteBalance::Warm => WhiteBalanceSettings {
+                enabled: true,
+                strength: 0.5,
+                mode: "avg",
+                temperature_bias: 500.0, // Positive = warmer (shift toward yellow/red)
+            },
+            WhiteBalance::Cool => WhiteBalanceSettings {
+                enabled: true,
+                strength: 0.5,
+                mode: "avg",
+                temperature_bias: -500.0, // Negative = cooler (shift toward blue)
+            },
+        }
+    }
+}
+
 use invers_core::decoders::DecodedImage;
 use invers_core::models::{
     AutoWbMode, BaseEstimation, FilmPreset, InversionMode, MaskProfile, PipelineMode, ScanProfile,
@@ -22,6 +99,9 @@ pub struct ProcessingParams {
     pub silent: bool,
     pub verbose: bool,
     pub debug: bool,
+
+    // White balance (user-facing unified interface)
+    pub white_balance: WhiteBalance,
 
     // Pipeline options
     pub pipeline: String,
@@ -55,6 +135,7 @@ impl Default for ProcessingParams {
             silent: false,
             verbose: false,
             debug: false,
+            white_balance: WhiteBalance::Auto,
             pipeline: "legacy".to_string(),
             db_red: None,
             db_blue: None,
@@ -124,6 +205,22 @@ pub fn process_single_image(
 
     let output_dir = output_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
+    // Derive white balance settings from the unified WhiteBalance preset
+    // Debug args can still override via auto_wb/auto_wb_strength/auto_wb_mode
+    let wb_settings = params.white_balance.to_settings();
+    let effective_auto_wb = if params.auto_wb != wb_settings.enabled {
+        // Debug arg explicitly overrode white balance
+        params.auto_wb
+    } else {
+        wb_settings.enabled
+    };
+    let effective_wb_strength = if (params.auto_wb_strength - wb_settings.strength).abs() > 0.001 {
+        // Debug arg explicitly overrode strength
+        params.auto_wb_strength
+    } else {
+        wb_settings.strength
+    };
+
     // Build conversion options using shared utility
     let mut options = build_convert_options_full_with_gpu(
         output_path.to_path_buf(), // input path (used for metadata, not critical here)
@@ -140,8 +237,8 @@ pub fn process_single_image(
         false, // no_auto_levels
         false, // preserve_headroom
         false, // no_clip
-        params.auto_wb,
-        params.auto_wb_strength,
+        effective_auto_wb,
+        effective_wb_strength,
         params.debug,
         use_gpu,
     )?;
@@ -161,8 +258,14 @@ pub fn process_single_image(
         });
     }
 
-    // Apply auto-WB mode
-    options.auto_wb_mode = match params.auto_wb_mode.to_lowercase().as_str() {
+    // Apply auto-WB mode from white balance preset or debug override
+    let effective_wb_mode = if params.auto_wb_mode != "avg" && params.auto_wb_mode != wb_settings.mode {
+        // Debug arg explicitly overrode mode
+        &params.auto_wb_mode
+    } else {
+        wb_settings.mode
+    };
+    options.auto_wb_mode = match effective_wb_mode.to_lowercase().as_str() {
         "avg" | "average" | "grayworld" => AutoWbMode::Average,
         "pct" | "percentile" | "whitepatch" => AutoWbMode::Percentile,
         _ => AutoWbMode::GrayPixel,

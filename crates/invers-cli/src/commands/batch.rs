@@ -1,11 +1,12 @@
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use invers_cli::{
     determine_output_path, expand_inputs, make_base_from_rgb, parse_base_rgb, process_single_image,
-    ProcessingParams,
+    ProcessingParams, WhiteBalance,
 };
 
 use invers_core::models::BaseEstimation;
@@ -43,15 +44,15 @@ pub fn cmd_batch(
     base_from: Option<PathBuf>,
     base: Option<String>,
     per_image: bool,
-    preset: Option<PathBuf>,
-    scan_profile_path: Option<PathBuf>,
     export: String,
+    white_balance: WhiteBalance,
     exposure: f32,
     out: Option<PathBuf>,
     threads: Option<usize>,
     silent: bool,
     verbose: bool,
     cpu_only: bool,
+    dry_run: bool,
     // Debug options
     no_tonecurve: bool,
     no_colormatrix: bool,
@@ -72,6 +73,8 @@ pub fn cmd_batch(
     cb_color: Option<String>,
     cb_film: Option<String>,
     cb_wb: Option<String>,
+    // B&W conversion flag
+    bw: bool,
 ) -> Result<(), String> {
     let batch_start = Instant::now();
 
@@ -96,6 +99,37 @@ pub fn cmd_batch(
 
     if !silent {
         println!("Found {} image files to process", inputs.len());
+    }
+
+    // Determine base estimation strategy description for messaging
+    let strategy_message = if let Some(ref base_str) = base {
+        let base_rgb = parse_base_rgb(base_str)?;
+        format!(
+            "Using manual base values: [{:.4}, {:.4}, {:.4}]",
+            base_rgb[0], base_rgb[1], base_rgb[2]
+        )
+    } else if per_image {
+        "Using per-image base estimation (each image analyzed separately)".to_string()
+    } else if base_from.is_some() {
+        "Using base estimation from file".to_string()
+    } else {
+        "Using same-roll mode: base will be estimated from first image".to_string()
+    };
+
+    if !silent {
+        println!("{}", strategy_message);
+    }
+
+    // Handle dry-run mode
+    if dry_run {
+        println!("\n=== DRY RUN MODE ===");
+        println!("Files that would be processed ({}):", inputs.len());
+        for input in &inputs {
+            println!("  {}", input.display());
+        }
+        println!("\nBase estimation strategy: {}", strategy_message);
+        println!("No files were processed.");
+        return Ok(());
     }
 
     // Configure thread pool if specified
@@ -198,24 +232,11 @@ pub fn cmd_batch(
         BaseStrategy::PerImage => None, // Each image will estimate its own
     };
 
-    // Load shared scan profile if provided
-    let scan_profile = if let Some(profile_path) = &scan_profile_path {
-        if !silent {
-            println!("Loading scan profile from {}...", profile_path.display());
-        }
-        Some(invers_core::presets::load_scan_profile(profile_path)?)
+    // Override inversion mode if --bw flag is set
+    let effective_inversion = if bw {
+        Some("bw".to_string())
     } else {
-        None
-    };
-
-    // Load shared film preset if provided
-    let film_preset = if let Some(preset_path) = &preset {
-        if !silent {
-            println!("Loading film preset from {}...", preset_path.display());
-        }
-        Some(invers_core::presets::load_film_preset(preset_path)?)
-    } else {
-        None
+        inversion.clone()
     };
 
     // Build shared processing params (reused for all images)
@@ -226,6 +247,7 @@ pub fn cmd_batch(
         silent: true, // Suppress per-image output in batch mode
         verbose,
         debug,
+        white_balance,
         pipeline: pipeline.clone(),
         db_red,
         db_blue,
@@ -237,7 +259,7 @@ pub fn cmd_batch(
         cb_wb: cb_wb.clone(),
         no_tonecurve,
         no_colormatrix,
-        inversion: inversion.clone(),
+        inversion: effective_inversion,
         auto_wb,
         auto_wb_strength,
         auto_wb_mode: auto_wb_mode.clone(),
@@ -251,6 +273,9 @@ pub fn cmd_batch(
     // Progress tracking
     let processed_count = AtomicUsize::new(0);
     let total_files = inputs.len();
+    let processing_start = Instant::now();
+    // Track cumulative time for averaging (used for ETA calculation)
+    let cumulative_time = Mutex::new(0.0f64);
 
     // Process files in parallel
     let results: Vec<Result<(PathBuf, f64), String>> = inputs
@@ -281,8 +306,8 @@ pub fn cmd_batch(
             process_single_image(
                 decoded,
                 base_estimation,
-                film_preset.clone(),
-                scan_profile.clone(),
+                None, // No film preset
+                None, // No scan profile
                 &output_path,
                 &params,
             )?;
@@ -291,14 +316,32 @@ pub fn cmd_batch(
 
             // Update progress
             let count = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
+
+            // Update cumulative time for ETA calculation
+            {
+                let mut cum = cumulative_time.lock().unwrap();
+                *cum += file_elapsed;
+            }
+
             if !silent {
+                // Calculate estimated time remaining based on wall-clock time
+                let wall_elapsed = processing_start.elapsed().as_secs_f64();
+                let remaining_files = total_files - count;
+                let avg_time_per_file = wall_elapsed / count as f64;
+                let est_remaining_secs = avg_time_per_file * remaining_files as f64;
+
+                // Format estimated remaining time
+                let est_remaining_str = format_duration(est_remaining_secs);
+
+                // Get just the filename for cleaner output
+                let filename = input
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| input.display().to_string());
+
                 println!(
-                    "[{}/{}] {} -> {} ({:.2}s)",
-                    count,
-                    total_files,
-                    input.display(),
-                    output_path.display(),
-                    file_elapsed
+                    "[{}/{}] processing {} - {:.1}s (est. {} remaining)",
+                    count, total_files, filename, file_elapsed, est_remaining_str
                 );
             } else {
                 println!("{}", output_path.display());
@@ -350,5 +393,22 @@ pub fn cmd_batch(
         Ok(())
     } else {
         Err(format!("{} files failed to process", errors.len()))
+    }
+}
+
+/// Format a duration in seconds to a human-readable string.
+///
+/// Examples: "2.3s", "1m 30s", "4m 30s"
+fn format_duration(seconds: f64) -> String {
+    if seconds < 60.0 {
+        format!("{:.1}s", seconds)
+    } else {
+        let minutes = (seconds / 60.0).floor() as u64;
+        let remaining_secs = (seconds % 60.0).round() as u64;
+        if remaining_secs == 0 {
+            format!("{}m", minutes)
+        } else {
+            format!("{}m {}s", minutes, remaining_secs)
+        }
     }
 }
