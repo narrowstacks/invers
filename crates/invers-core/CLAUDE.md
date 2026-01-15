@@ -25,7 +25,7 @@ Three processing pipelines (`pipeline/mod.rs:60`):
 
 GPU is feature-gated. Enable with `--features gpu`.
 
-Shaders in `gpu/shaders/*.wgsl` must match CPU algorithms exactly.
+**Shaders in `gpu/shaders/*.wgsl` must match CPU algorithms exactly.**
 Run `cargo test --features gpu` to verify CPU/GPU parity.
 
 ## Adding a Pipeline Stage

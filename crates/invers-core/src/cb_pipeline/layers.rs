@@ -81,14 +81,23 @@ pub fn apply_exposure_layer(pixel: &mut [f32], exposure: f32) {
 }
 
 /// Apply contrast layer using sigmoid
+///
+/// OPTIMIZATION: Pre-computes sigmoid normalization constants outside the channel loop.
+/// For high-frequency calls (per-pixel), this avoids redundant tanh() computations.
 pub fn apply_contrast_layer(pixel: &mut [f32], contrast: f32) {
     let midpoint = 0.5;
     let scale = 0.2;
 
     if contrast >= 1.0 {
         let c = 1.0 + contrast * scale;
+        // Pre-compute sigmoid normalization constants
+        let sig_0 = (0.5 * c * (0.0 - midpoint)).tanh();
+        let sig_1 = (0.5 * c * (1.0 - midpoint)).tanh();
+        let inv_range = 1.0 / (sig_1 - sig_0);
+
         for value in pixel.iter_mut() {
-            *value = apply_sigmoid(c, midpoint, *value, 1.0);
+            let sig_x = (0.5 * c * (*value - midpoint)).tanh();
+            *value = (sig_x - sig_0) * inv_range;
         }
     } else if contrast <= -1.0 {
         let c = 1.0 + contrast.abs() * scale * 0.5;
@@ -99,21 +108,34 @@ pub fn apply_contrast_layer(pixel: &mut [f32], contrast: f32) {
 }
 
 /// Apply highlights adjustment
+///
+/// OPTIMIZATION: Pre-computes sigmoid normalization constants outside the channel loop.
 pub fn apply_highlights_layer(pixel: &mut [f32], highlights: f32) {
     let midpoint = 0.75;
     let range = 0.9;
     let scale = 0.1;
     let strength = 0.5 + highlights.abs() * scale;
+    let threshold = 1.0 - range;
 
     if highlights >= 1.0 {
+        // Pre-compute sigmoid constants for this strength/midpoint/range
+        // Note: sig_0 and sig_1 use 0.0 and 1.0 as inputs, NOT scaled by range
+        // The range only scales the actual input value x
+        let sig_0 = (0.5 * strength * (0.0 - midpoint)).tanh();
+        let sig_1 = (0.5 * strength * (1.0 - midpoint)).tanh();
+        let norm_factor = range / (sig_1 - sig_0);
+
         for value in pixel.iter_mut() {
-            if *value > 1.0 - range {
-                *value = 1.0 - apply_sigmoid(strength, midpoint, 1.0 - *value, range);
+            if *value > threshold {
+                // x = inv_value / range, where inv_value = 1.0 - *value
+                let x = (1.0 - *value) / range;
+                let sig_x = (0.5 * strength * (x - midpoint)).tanh();
+                *value = 1.0 - (sig_x - sig_0) * norm_factor;
             }
         }
     } else if highlights <= -1.0 {
         for value in pixel.iter_mut() {
-            if *value > 1.0 - range {
+            if *value > threshold {
                 *value = 1.0 - apply_inverse_sigmoid(strength, midpoint, 1.0 - *value, range);
             }
         }
@@ -121,6 +143,8 @@ pub fn apply_highlights_layer(pixel: &mut [f32], highlights: f32) {
 }
 
 /// Apply shadows adjustment
+///
+/// OPTIMIZATION: Pre-computes sigmoid normalization constants outside the channel loop.
 pub fn apply_shadows_layer(pixel: &mut [f32], shadows: f32) {
     let midpoint = 0.75;
     let range = 0.9;
@@ -133,9 +157,18 @@ pub fn apply_shadows_layer(pixel: &mut [f32], shadows: f32) {
             }
         }
     } else if shadows < 0.0 {
+        // Pre-compute sigmoid constants
+        // Note: sig_0 and sig_1 use 0.0 and 1.0 as inputs, NOT scaled by range
+        let sig_0 = (0.5 * strength * (0.0 - midpoint)).tanh();
+        let sig_1 = (0.5 * strength * (1.0 - midpoint)).tanh();
+        let norm_factor = range / (sig_1 - sig_0);
+
         for value in pixel.iter_mut() {
             if *value < range {
-                *value = apply_sigmoid(strength, midpoint, *value, range);
+                // x = *value / range (normalized input)
+                let x = *value / range;
+                let sig_x = (0.5 * strength * (x - midpoint)).tanh();
+                *value = (sig_x - sig_0) * norm_factor;
             }
         }
     }
@@ -283,5 +316,103 @@ mod tests {
         assert!(pixel[0] < original[0]); // Below 0.5 should go lower
         assert!((pixel[1] - 0.5).abs() < 0.01); // 0.5 should stay near 0.5
         assert!(pixel[2] > original[2]); // Above 0.5 should go higher
+    }
+
+    /// Verify optimized highlights layer matches the original apply_sigmoid-based implementation
+    #[test]
+    fn test_highlights_layer_parity() {
+        let midpoint = 0.75f32;
+        let range = 0.9f32;
+        let highlights: f32 = 5.0; // Test with positive highlights
+        let strength = 0.5 + highlights.abs() * 0.1;
+        let threshold = 1.0 - range;
+
+        // Test values in the highlight range (> 0.1)
+        let test_values = [0.15, 0.3, 0.5, 0.7, 0.85, 0.95];
+
+        for &val in &test_values {
+            if val > threshold {
+                // Original implementation using apply_sigmoid
+                let inv_value = 1.0 - val;
+                let expected = 1.0 - apply_sigmoid(strength, midpoint, inv_value, range);
+
+                // Optimized implementation
+                let mut pixel = [val, val, val];
+                apply_highlights_layer(&mut pixel, highlights);
+
+                let diff = (pixel[0] - expected).abs();
+                assert!(
+                    diff < 1e-5,
+                    "Highlights parity failed for val={}: expected={}, got={}, diff={}",
+                    val,
+                    expected,
+                    pixel[0],
+                    diff
+                );
+            }
+        }
+    }
+
+    /// Verify optimized shadows layer matches the original apply_sigmoid-based implementation
+    #[test]
+    fn test_shadows_layer_parity() {
+        let midpoint = 0.75f32;
+        let range = 0.9f32;
+        let shadows: f32 = -5.0; // Test with negative shadows (uses sigmoid)
+        let strength = 0.5 + shadows.abs() * 0.1;
+
+        // Test values in the shadow range (< 0.9)
+        let test_values = [0.1, 0.3, 0.5, 0.7, 0.85];
+
+        for &val in &test_values {
+            if val < range {
+                // Original implementation using apply_sigmoid
+                let expected = apply_sigmoid(strength, midpoint, val, range);
+
+                // Optimized implementation
+                let mut pixel = [val, val, val];
+                apply_shadows_layer(&mut pixel, shadows);
+
+                let diff = (pixel[0] - expected).abs();
+                assert!(
+                    diff < 1e-5,
+                    "Shadows parity failed for val={}: expected={}, got={}, diff={}",
+                    val,
+                    expected,
+                    pixel[0],
+                    diff
+                );
+            }
+        }
+    }
+
+    /// Verify contrast layer optimization matches original
+    #[test]
+    fn test_contrast_layer_parity() {
+        let midpoint = 0.5f32;
+        let scale = 0.2f32;
+        let contrast: f32 = 5.0;
+        let c = 1.0 + contrast * scale;
+
+        let test_values = [0.1, 0.3, 0.5, 0.7, 0.9];
+
+        for &val in &test_values {
+            // Original implementation
+            let expected = apply_sigmoid(c, midpoint, val, 1.0);
+
+            // Optimized implementation
+            let mut pixel = [val, val, val];
+            apply_contrast_layer(&mut pixel, contrast);
+
+            let diff = (pixel[0] - expected).abs();
+            assert!(
+                diff < 1e-5,
+                "Contrast parity failed for val={}: expected={}, got={}, diff={}",
+                val,
+                expected,
+                pixel[0],
+                diff
+            );
+        }
     }
 }
