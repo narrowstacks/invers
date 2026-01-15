@@ -56,7 +56,6 @@ jobs:
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/invers staging/
-          cp -r profiles staging/
           cp -r config staging/
           cd staging
           tar czvf ../invers-${{ matrix.target }}.tar.gz .
