@@ -1,32 +1,31 @@
 class Invers < Formula
   desc "Professional-grade film negative to positive conversion tool"
   homepage "https://github.com/narrowstacks/invers"
-  version "0.3.0"
+  version "0.5.0"
   license any_of: ["MIT"]
 
   on_macos do
     on_intel do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-x86_64-apple-darwin.tar.gz"
-      sha256 "d8ff425872b6ce2e902d716ad273d3e3224b72915a40e3532b9491c957e55269"
+      sha256 "6e9b7ad6b19750de406651914957ee596de985a3ab01ab83e85458cbebfe79b5"
     end
 
     on_arm do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-aarch64-apple-darwin.tar.gz"
-      sha256 "34c5bd9b772aff3c67d6cd49dfb45b19821dc347781829e66c8a9483e216a2ee"
+      sha256 "ff2edc5e7ee478fd1c9d0d50858351bb9ffa0836eac3383d5f84dd8f5d492be6"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/narrowstacks/invers/releases/download/v#{version}/invers-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "800d6cee8f7026e50bbdaa6b84fc07639c224da39fbae45c90db14fe03b47ec1"
+      sha256 "6cd7c831182f91c7a090cbcc3c07baaf84dde608a6fde723cc2e6cb38c108a1e"
     end
   end
 
   def install
     bin.install "invers"
     pkgshare.install "config"
-    pkgshare.install "profiles"
   end
 
   def caveats
