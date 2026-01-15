@@ -43,24 +43,35 @@ const COLOR_CENTERS: array<f32, 8> = array<f32, 8>(
 );
 
 // Helper function for HSL to RGB conversion
+// Optimized using select() to avoid branching
 fn hue_to_rgb(p: f32, q: f32, t_in: f32) -> f32 {
+    // Wrap t to [0, 1) range using select() instead of branches
     var t = t_in;
-    if (t < 0.0) { t = t + 1.0; }
-    if (t > 1.0) { t = t - 1.0; }
+    t = select(t, t + 1.0, t < 0.0);
+    t = select(t, t - 1.0, t > 1.0);
 
-    if (t < 1.0 / 6.0) {
-        return p + (q - p) * 6.0 * t;
-    }
-    if (t < 0.5) {
-        return q;
-    }
-    if (t < 2.0 / 3.0) {
-        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
-    }
-    return p;
+    // Calculate all possible results
+    let rising = p + (q - p) * 6.0 * t;           // t < 1/6: rising edge
+    let peak = q;                                  // 1/6 <= t < 1/2: peak
+    let falling = p + (q - p) * (2.0 / 3.0 - t) * 6.0; // 1/2 <= t < 2/3: falling edge
+    let base = p;                                  // t >= 2/3: base
+
+    // Use nested select for branchless selection
+    // Order matters: check conditions from most restrictive to least
+    let result = select(
+        select(
+            select(base, falling, t < 2.0 / 3.0),
+            peak,
+            t < 0.5
+        ),
+        rising,
+        t < 1.0 / 6.0
+    );
+
+    return result;
 }
 
-// RGB to HSL conversion
+// RGB to HSL conversion - optimized with select() to reduce branching
 fn rgb_to_hsl_impl(r: f32, g: f32, b: f32) -> vec3<f32> {
     let max_val = max(max(r, g), b);
     let min_val = min(min(r, g), b);
@@ -69,47 +80,44 @@ fn rgb_to_hsl_impl(r: f32, g: f32, b: f32) -> vec3<f32> {
     // Lightness
     let l = (max_val + min_val) / 2.0;
 
-    var h: f32 = 0.0;
-    var s: f32 = 0.0;
+    // Saturation - compute both branches and select
+    let s_low = delta / max(max_val + min_val, 0.0001);
+    let s_high = delta / max(2.0 - max_val - min_val, 0.0001);
+    let s = select(s_high, s_low, l < 0.5);
 
-    if (delta > 0.0001) {
-        // Saturation
-        if (l < 0.5) {
-            s = delta / (max_val + min_val);
-        } else {
-            s = delta / (2.0 - max_val - min_val);
-        }
+    // Hue calculation - compute all branches
+    // When max is R: h = (g - b) / delta, add 6 if g < b
+    let h_r_base = (g - b) / max(delta, 0.0001);
+    let h_r = select(h_r_base, h_r_base + 6.0, g < b);
+    // When max is G: h = (b - r) / delta + 2
+    let h_g = (b - r) / max(delta, 0.0001) + 2.0;
+    // When max is B: h = (r - g) / delta + 4
+    let h_b = (r - g) / max(delta, 0.0001) + 4.0;
 
-        // Hue
-        if (max_val == r) {
-            h = (g - b) / delta;
-            if (g < b) {
-                h = h + 6.0;
-            }
-        } else if (max_val == g) {
-            h = (b - r) / delta + 2.0;
-        } else {
-            h = (r - g) / delta + 4.0;
-        }
+    // Select based on which component is max (use epsilon comparison for float equality)
+    let eps = 0.0001;
+    let is_r_max = abs(max_val - r) < eps;
+    let is_g_max = abs(max_val - g) < eps;
 
-        h = h * 60.0; // Convert to degrees
-    }
+    // Chained select: check R first, then G, default to B
+    let h_raw = select(select(h_b, h_g, is_g_max), h_r, is_r_max);
+    let h = h_raw * 60.0; // Convert to degrees
 
-    return vec3<f32>(h, s, l);
+    // Zero out h and s when delta is negligible (grayscale)
+    let has_color = delta > 0.0001;
+    return vec3<f32>(
+        select(0.0, h, has_color),
+        select(0.0, s, has_color),
+        l
+    );
 }
 
-// HSL to RGB conversion
+// HSL to RGB conversion - optimized with select()
 fn hsl_to_rgb_impl(h: f32, s: f32, l: f32) -> vec3<f32> {
-    if (s < 0.0001) {
-        return vec3<f32>(l, l, l);
-    }
-
-    var q: f32;
-    if (l < 0.5) {
-        q = l * (1.0 + s);
-    } else {
-        q = l + s - l * s;
-    }
+    // Compute both q branches and select
+    let q_low = l * (1.0 + s);
+    let q_high = l + s - l * s;
+    let q = select(q_high, q_low, l < 0.5);
     let p = 2.0 * l - q;
 
     let h_norm = h / 360.0;
@@ -118,7 +126,8 @@ fn hsl_to_rgb_impl(h: f32, s: f32, l: f32) -> vec3<f32> {
     let g = hue_to_rgb(p, q, h_norm);
     let b = hue_to_rgb(p, q, h_norm - 1.0 / 3.0);
 
-    return vec3<f32>(r, g, b);
+    // Return grayscale if saturation is negligible
+    return select(vec3<f32>(r, g, b), vec3<f32>(l, l, l), s < 0.0001);
 }
 
 // Convert RGB to HSL (in-place)
@@ -202,49 +211,88 @@ fn get_lum_adj(idx: u32) -> f32 {
     }
 }
 
-// Calculate angular distance between two hue values
+// Calculate angular distance between two hue values (branchless version)
 fn hue_distance(h1: f32, h2: f32) -> f32 {
-    var diff = abs(h1 - h2);
-    if (diff > 180.0) {
-        diff = 360.0 - diff;
-    }
-    return diff;
+    let diff = abs(h1 - h2);
+    return select(diff, 360.0 - diff, diff > 180.0);
 }
 
+// Sector boundaries: midpoints between adjacent color centers
+// R(0), O(30), Y(60), G(120), A(180), B(240), P(285), M(315)
+// Boundaries: 15, 45, 90, 150, 210, 262.5, 300, 337.5
+const SECTOR_BOUNDS: array<f32, 8> = array<f32, 8>(
+    15.0,    // R-O boundary (midpoint of 0-30)
+    45.0,    // O-Y boundary (midpoint of 30-60)
+    90.0,    // Y-G boundary (midpoint of 60-120)
+    150.0,   // G-A boundary (midpoint of 120-180)
+    210.0,   // A-B boundary (midpoint of 180-240)
+    262.5,   // B-P boundary (midpoint of 240-285)
+    300.0,   // P-M boundary (midpoint of 285-315)
+    337.5    // M-R boundary (midpoint of 315-360)
+);
+
 // Find primary and secondary color ranges and blend factor
+// O(1) direct calculation based on hue angle sectors
 fn get_color_weights(hue: f32) -> vec3<f32> {
-    var primary_idx: u32 = 0u;
-    var min_dist: f32 = 360.0;
+    // Normalize hue to [0, 360)
+    var h = hue;
+    h = select(h, h + 360.0, h < 0.0);
+    h = select(h, h - 360.0, h >= 360.0);
 
-    // Find nearest color center
-    for (var i: u32 = 0u; i < 8u; i = i + 1u) {
-        let dist = hue_distance(hue, COLOR_CENTERS[i]);
-        if (dist < min_dist) {
-            min_dist = dist;
-            primary_idx = i;
-        }
+    // Determine primary sector using binary-style search with select()
+    // This avoids loops entirely by using arithmetic comparisons
+    //
+    // Sector mapping:
+    // [337.5, 360) or [0, 15) -> 0 (Red)
+    // [15, 45)                -> 1 (Orange)
+    // [45, 90)                -> 2 (Yellow)
+    // [90, 150)               -> 3 (Green)
+    // [150, 210)              -> 4 (Aqua)
+    // [210, 262.5)            -> 5 (Blue)
+    // [262.5, 300)            -> 6 (Purple)
+    // [300, 337.5)            -> 7 (Magenta)
+
+    // Count how many boundaries the hue exceeds to determine sector
+    // Red wraps around, so we handle it specially
+    var sector: u32 = 0u;
+    sector = select(sector, 1u, h >= SECTOR_BOUNDS[0]);
+    sector = select(sector, 2u, h >= SECTOR_BOUNDS[1]);
+    sector = select(sector, 3u, h >= SECTOR_BOUNDS[2]);
+    sector = select(sector, 4u, h >= SECTOR_BOUNDS[3]);
+    sector = select(sector, 5u, h >= SECTOR_BOUNDS[4]);
+    sector = select(sector, 6u, h >= SECTOR_BOUNDS[5]);
+    sector = select(sector, 7u, h >= SECTOR_BOUNDS[6]);
+    sector = select(sector, 0u, h >= SECTOR_BOUNDS[7]); // Wrap to Red
+
+    let primary_idx = sector;
+    let primary_center = COLOR_CENTERS[primary_idx];
+
+    // Calculate signed distance from primary center (handling wrap-around)
+    var signed_dist = h - primary_center;
+    // Handle wrap-around for Red sector
+    if (primary_idx == 0u) {
+        signed_dist = select(signed_dist, signed_dist - 360.0, h > 180.0);
     }
 
-    // Find second nearest
-    var secondary_idx: u32 = (primary_idx + 1u) % 8u;
-    var second_min_dist: f32 = 360.0;
+    // Secondary is the adjacent sector in the direction of the hue
+    // If hue is CW from center (positive), secondary is next sector
+    // If hue is CCW from center (negative), secondary is previous sector
+    let secondary_idx = select(
+        (primary_idx + 7u) % 8u,  // Previous sector (CCW)
+        (primary_idx + 1u) % 8u,  // Next sector (CW)
+        signed_dist >= 0.0
+    );
 
-    for (var i: u32 = 0u; i < 8u; i = i + 1u) {
-        if (i != primary_idx) {
-            let dist = hue_distance(hue, COLOR_CENTERS[i]);
-            if (dist < second_min_dist) {
-                second_min_dist = dist;
-                secondary_idx = i;
-            }
-        }
-    }
+    // Calculate blend factor based on position between the two centers
+    let secondary_center = COLOR_CENTERS[secondary_idx];
+    let dist_to_primary = hue_distance(h, primary_center);
+    let dist_to_secondary = hue_distance(h, secondary_center);
+    let total_dist = dist_to_primary + dist_to_secondary;
 
-    // Calculate blend factor
-    let total_dist = min_dist + second_min_dist;
-    var blend: f32 = 0.0;
-    if (total_dist > 0.001) {
-        blend = clamp(min_dist / total_dist, 0.0, 0.5);
-    }
+    // Blend is the proportion of influence from secondary color
+    // When at primary center: blend = 0
+    // At midpoint: blend = 0.5
+    let blend = select(0.0, clamp(dist_to_primary / total_dist, 0.0, 0.5), total_dist > 0.001);
 
     return vec3<f32>(f32(primary_idx), f32(secondary_idx), blend);
 }
@@ -290,8 +338,8 @@ fn apply_hsl_adjustments(
     // Apply adjustments
     // Hue: ±100 maps to ±30 degrees
     h = h + hue_adj * 0.3;
-    if (h < 0.0) { h = h + 360.0; }
-    if (h >= 360.0) { h = h - 360.0; }
+    h = select(h, h + 360.0, h < 0.0);
+    h = select(h, h - 360.0, h >= 360.0);
 
     // Saturation: ±100 as multiplicative factor
     s = s * (1.0 + sat_adj / 100.0);

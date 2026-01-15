@@ -13,6 +13,25 @@ A professional-grade film negative to positive conversion tool written in Rust. 
 - **High-Quality Output**: 16-bit TIFF export in linear Rec. 2020 colorspace
 - **Parallel Processing**: Multi-threaded pipeline using Rayon for fast batch processing
 - **Film Presets**: YAML-based preset system for film-specific settings
+- **Modular Architecture**: Clean separation of concerns with dedicated modules for pipeline stages, auto-adjustments, and configuration
+
+## Architecture
+
+Invers follows a modular Rust workspace architecture designed for maintainability and extensibility:
+
+- **invers-core**: Core library with modular subsystems
+  - `pipeline/` - Processing stages (base estimation, inversion, tone mapping)
+  - `auto_adjust/` - Auto-correction algorithms (levels, color, exposure, white balance)
+  - `cb_pipeline/` - Curves-based processing pipeline inspired by Negative Lab Pro
+  - `models/` - Data structures for presets, profiles, and conversion options
+  - `config/` - Configuration management with defaults and testing utilities
+  - `gpu/` - Optional GPU acceleration via WGPU (feature-gated)
+
+- **invers-cli**: Command-line interface with modular command structure
+  - Each command (`convert`, `batch`, `analyze`, `preset`, `init`) in its own module
+  - Debug commands available in debug builds
+
+- **invers-gui**: Qt-based GUI (planned)
 
 ## Installation
 
@@ -351,35 +370,76 @@ highlight_compression: 0.95
 ```text
 invers/
 ├── crates/
-│   ├── invers-core/     # Core conversion library
+│   ├── invers-core/         # Core conversion library
 │   │   ├── src/
-│   │   │   ├── lib.rs          # Library exports
-│   │   │   ├── models.rs       # Data structures
-│   │   │   ├── pipeline.rs     # Processing pipeline
-│   │   │   ├── decoders.rs     # Image format decoders
-│   │   │   ├── exporters.rs    # Output format writers
-│   │   │   ├── presets.rs      # Preset management
-│   │   │   ├── auto_adjust.rs  # Auto-adjustment algorithms
-│   │   │   ├── config.rs       # Configuration system
-│   │   │   └── diagnostics.rs  # Testing utilities
+│   │   │   ├── lib.rs               # Library exports
+│   │   │   ├── models/              # Data structures (modular)
+│   │   │   │   ├── mod.rs           # Module exports
+│   │   │   │   ├── base_estimation.rs
+│   │   │   │   ├── cb.rs            # Curves-based pipeline models
+│   │   │   │   ├── convert_options.rs
+│   │   │   │   ├── preset.rs
+│   │   │   │   └── scan_profile.rs
+│   │   │   ├── pipeline/            # Processing pipeline (modular)
+│   │   │   │   ├── mod.rs           # Main pipeline orchestration
+│   │   │   │   ├── base_estimation.rs
+│   │   │   │   ├── inversion.rs
+│   │   │   │   └── tone_mapping.rs
+│   │   │   ├── auto_adjust/         # Auto-adjustment algorithms (modular)
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── color.rs
+│   │   │   │   ├── exposure.rs
+│   │   │   │   ├── levels.rs
+│   │   │   │   ├── parallel.rs
+│   │   │   │   └── white_balance.rs
+│   │   │   ├── cb_pipeline/         # Curves-based pipeline (NLP-inspired)
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── histogram.rs
+│   │   │   │   ├── layers.rs
+│   │   │   │   └── white_balance.rs
+│   │   │   ├── config/              # Configuration system (modular)
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── defaults.rs
+│   │   │   │   └── testing.rs
+│   │   │   ├── gpu/                 # GPU acceleration (optional)
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── context.rs
+│   │   │   │   ├── buffers.rs
+│   │   │   │   ├── pipeline.rs
+│   │   │   │   └── shaders/
+│   │   │   ├── decoders.rs          # Image format decoders
+│   │   │   ├── exporters.rs         # Output format writers
+│   │   │   ├── presets.rs           # Preset management
+│   │   │   ├── color.rs             # Color space utilities
+│   │   │   ├── diagnostics.rs       # Debug utilities
+│   │   │   └── testing.rs           # Test utilities
 │   │   └── Cargo.toml
 │   │
-│   ├── invers-cli/      # Command-line interface
+│   ├── invers-cli/          # Command-line interface
 │   │   ├── src/
-│   │   │   ├── main.rs         # CLI entry point
-│   │   │   └── lib.rs          # Shared utilities
+│   │   │   ├── main.rs              # CLI entry point
+│   │   │   ├── lib.rs               # Shared utilities
+│   │   │   └── commands/            # Command implementations (modular)
+│   │   │       ├── mod.rs
+│   │   │       ├── analyze.rs
+│   │   │       ├── batch.rs
+│   │   │       ├── convert.rs
+│   │   │       ├── debug.rs         # Debug-only commands
+│   │   │       ├── init.rs
+│   │   │       └── preset.rs
 │   │   └── Cargo.toml
 │   │
-│   └── invers-gui/      # GUI application (in development)
+│   └── invers-gui/          # GUI application (planned)
 │       ├── src/
 │       │   └── main.rs
 │       └── Cargo.toml
 │
+├── config/
+│   └── pipeline_defaults.yml
 ├── profiles/
-│   └── film/            # Film preset files
+│   └── film/                # Film preset files
 │
-├── pipeline_defaults.yml
-├── Cargo.toml           # Workspace manifest
+├── Cargo.toml               # Workspace manifest
 └── README.md
 ```
 
@@ -435,6 +495,8 @@ invers/
 - [x] TIFF16 export
 - [x] CLI interface
 - [x] Preset system
+- [x] Modular architecture (core library and CLI)
+- [x] Curves-based pipeline (NLP-inspired algorithms)
 - [ ] RAW format support
 - [ ] Linear DNG export
 - [ ] GUI application
@@ -451,5 +513,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Built with Rust and the amazing ecosystem of image processing crates
-- Inspired by professional film scanning workflows and tools like Grain2Pixel and NegativeLabPro.
+- Inspired by professional film scanning workflows and tools like Grain2Pixel.
 - Evan Dorsky's [Why is Color Negative Film Orange?](https://observablehq.com/@dorskyee/understanding-color-film)

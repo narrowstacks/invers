@@ -256,6 +256,13 @@ pub struct InversionParams {
     pub bw_headroom: f32,
     pub pixel_count: u32,
     pub _padding: u32,
+    /// Pre-computed log10(base_r) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_r: f32,
+    /// Pre-computed log10(base_g) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_g: f32,
+    /// Pre-computed log10(base_b) for log inversion optimization (0.0 = compute in shader)
+    pub log_base_b: f32,
+    pub _padding2: f32,
 }
 
 /// Tone curve parameters for uniform buffer.
@@ -306,6 +313,35 @@ pub struct GainParams {
     pub _padding: u32,
 }
 
+/// CB inversion parameters for uniform buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct CbInversionParams {
+    pub white_r: f32,
+    pub black_r: f32,
+    pub white_g: f32,
+    pub black_g: f32,
+    pub white_b: f32,
+    pub black_b: f32,
+    pub is_negative: u32,
+    pub pixel_count: u32,
+}
+
+/// CB layer parameters for uniform buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct CbLayerParams {
+    pub wb_offsets: [f32; 4],
+    pub wb_gamma: [f32; 4],
+    pub color_offsets: [f32; 4],
+    pub tonal_0: [f32; 4],
+    pub tonal_1: [f32; 4],
+    pub tonal_2: [f32; 4],
+    pub shadow_colors: [f32; 4],
+    pub highlight_colors: [f32; 4],
+    pub flags: [u32; 4],
+}
+
 /// HSL adjustment parameters for uniform buffer.
 /// Uses vec4 pairs for 16-byte alignment required by WGSL uniform buffers.
 #[repr(C)]
@@ -330,6 +366,20 @@ pub struct UtilityParams {
     pub param2: f32,
     pub param3: f32,
     pub pixel_count: u32,
+}
+
+/// Subsample parameters for efficient analysis downloads.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct SubsampleParams {
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub stride: u32,
+    pub output_pixel_count: u32,
+    pub _padding1: u32,
+    pub _padding2: u32,
+    pub _padding3: u32,
 }
 
 /// Create a uniform buffer from parameter data.

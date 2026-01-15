@@ -33,3 +33,10 @@ OPTIMIZATION_SUMMARY.md
 docs/
 .claude/settings.local.json
 .cursor/debug.log
+
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo

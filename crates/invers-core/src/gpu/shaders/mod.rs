@@ -21,4 +21,11 @@ impl Shaders {
 
     /// Utility operations (clamp, exposure, shadow lift, highlight compress).
     pub const UTILITY: &'static str = include_str!("utility.wgsl");
+
+    /// Curves-based (CB) inversion and layer operations.
+    pub const CB_INVERSION: &'static str = include_str!("cb_inversion.wgsl");
+    pub const CB_LAYERS: &'static str = include_str!("cb_layers.wgsl");
+
+    /// Subsampling for efficient analysis downloads.
+    pub const SUBSAMPLE: &'static str = include_str!("subsample.wgsl");
 }

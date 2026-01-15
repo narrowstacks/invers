@@ -22,7 +22,7 @@ mod shaders;
 
 pub use buffers::GpuImage;
 pub use context::{GpuContext, GpuError};
-pub use pipeline::process_image_gpu;
+pub use pipeline::{process_image_cb_gpu, process_image_gpu};
 
 /// Check if GPU acceleration is available on this system.
 pub fn is_gpu_available() -> bool {

@@ -3,12 +3,10 @@
 # This file controls the default processing behavior.
 # All fields are optional - omit a value to use built-in defaults.
 #
-# In RELEASE builds, only the 7 essential options are used (inversion_mode,
-# enable_auto_levels, preserve_headroom, exposure_compensation, enable_auto_color,
-# skip_tone_curve, enable_auto_exposure). Release builds use MaskAware inversion by default.
+# In RELEASE builds, essential options are used and any advanced values specified
+# below override built-in defaults. The testing section remains debug-only.
 #
 # In DEBUG builds, all options are loaded including the testing section.
-# Debug builds use Linear inversion by default.
 
 defaults:
   # ==========================================================================
@@ -40,8 +38,8 @@ defaults:
   enable_auto_exposure: true
 
   # ==========================================================================
-  # ADVANCED OPTIONS (debug builds only)
-  # These are ignored in release builds, which use optimized hardcoded values.
+  # ADVANCED OPTIONS (optional overrides)
+  # These override built-in values in release builds as well.
   # ==========================================================================
 
   # Percentage of pixels to clip when computing auto levels (0.0-10.0)
@@ -54,6 +52,12 @@ defaults:
   # Gain limits for color correction
   auto_color_min_gain: 0.7
   auto_color_max_gain: 1.3
+
+  # Maximum channel divergence for auto-color (0.0-1.0)
+  # Limits how much channels can be adjusted relative to each other.
+  # Lower values preserve more scene color character (warmth/coolness),
+  # higher values allow more aggressive neutralization.
+  auto_color_max_divergence: 0.15
 
   # Base estimation: percentage of brightest pixels to sample (1.0-30.0)
   base_brightest_percent: 5.0
@@ -94,6 +98,7 @@ testing:
     auto_color_strength: 0.6
     auto_color_min_gain: 0.7
     auto_color_max_gain: 1.3
+    auto_color_max_divergence: 0.15
     base_brightest_percent: 5.0
     base_sampling_mode: Median
     inversion_mode: Linear

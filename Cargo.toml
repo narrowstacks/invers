@@ -1,12 +1,13 @@
 [workspace]
 members = [
+    "crates/invers-raw",
     "crates/invers-core",
     "crates/invers-cli"
     ]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Aaron F. Anderson"]
 license = "MIT"

@@ -51,24 +51,19 @@ fn smoothstep_value(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
-// Apply S-curve to a single value
+// Apply S-curve to a single value - optimized with select()
 fn apply_scurve_point(x: f32, strength: f32) -> f32 {
-    if (strength < 0.01) {
-        return x;
-    }
+    // Pre-compute both shadow and highlight paths to avoid divergent branching
+    // Shadow region: t = x * 2, result = smoothstep(t) * 0.5
+    let t_shadow = x * 2.0;
+    let adjusted_shadow = smoothstep_value(t_shadow) * 0.5;
 
-    var adjusted: f32;
-    if (x < 0.5) {
-        // Shadow region
-        let t = x * 2.0;
-        let smoothed = smoothstep_value(t);
-        adjusted = smoothed * 0.5;
-    } else {
-        // Highlight region
-        let t = (x - 0.5) * 2.0;
-        let smoothed = smoothstep_value(t);
-        adjusted = 0.5 + smoothed * 0.5;
-    }
+    // Highlight region: t = (x - 0.5) * 2, result = 0.5 + smoothstep(t) * 0.5
+    let t_highlight = (x - 0.5) * 2.0;
+    let adjusted_highlight = 0.5 + smoothstep_value(t_highlight) * 0.5;
+
+    // Select based on position (branchless)
+    let adjusted = select(adjusted_highlight, adjusted_shadow, x < 0.5);
 
     // Apply contrast around midpoint
     let s_value = (adjusted - 0.5) * (1.0 + strength * 0.5) + 0.5;
@@ -76,8 +71,13 @@ fn apply_scurve_point(x: f32, strength: f32) -> f32 {
     // Blend between original and adjusted
     let result = x * (1.0 - strength) + s_value * strength;
 
+    // Return original if strength is negligible, otherwise return adjusted
     // Clamp to working range (no soft-clip to preserve highlight detail)
-    return clamp(result, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
+    return select(
+        clamp(result, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING),
+        x,
+        strength < 0.01
+    );
 }
 
 // S-curve tone mapping (symmetric around midpoint)
@@ -98,7 +98,7 @@ fn apply_scurve(
     pixels[idx + 2u] = apply_scurve_point(pixels[idx + 2u], params.strength);
 }
 
-// Apply asymmetric curve to a single value
+// Apply asymmetric curve to a single value - optimized with select()
 fn apply_asymmetric_point(
     x: f32,
     toe_strength: f32,
@@ -106,23 +106,25 @@ fn apply_asymmetric_point(
     shoulder_strength: f32,
     shoulder_start: f32
 ) -> f32 {
-    var result: f32;
+    // Pre-compute all three regions to avoid divergent branching
 
-    if (x < toe_length) {
-        // Toe region (shadow lift)
-        let gamma = 1.0 / (1.0 + toe_strength * 1.5);
-        let t = x / toe_length;
-        result = toe_length * pow(t, gamma);
-    } else if (x > shoulder_start) {
-        // Shoulder region (highlight compression)
-        let gamma = 1.0 + shoulder_strength * 2.0;
-        let range = 1.0 - shoulder_start;
-        let t = (x - shoulder_start) / range;
-        result = shoulder_start + range * (1.0 - pow(1.0 - t, gamma));
-    } else {
-        // Mid region (linear passthrough)
-        result = x;
-    }
+    // Toe region (shadow lift)
+    let toe_gamma = 1.0 / (1.0 + toe_strength * 1.5);
+    let toe_t = x / max(toe_length, 0.0001);
+    let toe_result = toe_length * pow(toe_t, toe_gamma);
+
+    // Shoulder region (highlight compression)
+    let shoulder_gamma = 1.0 + shoulder_strength * 2.0;
+    let shoulder_range = 1.0 - shoulder_start;
+    let shoulder_t = (x - shoulder_start) / max(shoulder_range, 0.0001);
+    let shoulder_result = shoulder_start + shoulder_range * (1.0 - pow(1.0 - shoulder_t, shoulder_gamma));
+
+    // Select result based on region (branchless)
+    let result = select(
+        select(x, shoulder_result, x > shoulder_start),
+        toe_result,
+        x < toe_length
+    );
 
     // Clamp to working range (no soft-clip to preserve highlight detail)
     return clamp(result, WORKING_RANGE_FLOOR, WORKING_RANGE_CEILING);
