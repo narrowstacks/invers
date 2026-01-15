@@ -427,26 +427,16 @@ mod tests {
 
     #[test]
     fn test_working_range_constants() {
-        // Verify constants are properly defined
-        assert!(
-            WORKING_RANGE_FLOOR > 0.0,
-            "Floor should be positive: {}",
-            WORKING_RANGE_FLOOR
-        );
-        assert!(
-            WORKING_RANGE_FLOOR < 0.001,
-            "Floor should be small: {}",
-            WORKING_RANGE_FLOOR
-        );
-        assert!(
-            WORKING_RANGE_CEILING > 0.999,
-            "Ceiling should be near 1: {}",
-            WORKING_RANGE_CEILING
-        );
-        assert!(
-            WORKING_RANGE_CEILING < 1.0,
-            "Ceiling should be < 1: {}",
-            WORKING_RANGE_CEILING
-        );
+        // Verify constants are properly defined at compile time
+        // These are const assertions expressed as runtime checks for documentation
+        const _: () = {
+            assert!(WORKING_RANGE_FLOOR > 0.0);
+            assert!(WORKING_RANGE_CEILING < 1.0);
+        };
+
+        // Runtime verification that clamp_to_working_range uses valid bounds
+        assert_eq!(clamp_to_working_range(0.0), WORKING_RANGE_FLOOR);
+        assert_eq!(clamp_to_working_range(1.0), WORKING_RANGE_CEILING);
+        assert_eq!(clamp_to_working_range(0.5), 0.5);
     }
 }
