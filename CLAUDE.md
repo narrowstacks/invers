@@ -34,10 +34,10 @@ All processing uses f32 linear RGB (0.0-1.0 range).
 
 **Pipeline changes MUST be implemented in both CPU and GPU codepaths.**
 
-| Component | CPU               | GPU                  |
-| --------- | ----------------- | -------------------- |
-| Pipeline  | `pipeline/mod.rs` | `gpu/pipeline.rs`    |
-| Shaders   | N/A               | `gpu/shaders/*.wgsl` |
+| Component | CPU               | GPU                    |
+| --------- | ----------------- | ---------------------- |
+| Pipeline  | `pipeline/mod.rs` | `gpu/pipeline/mod.rs`  |
+| Shaders   | N/A               | `gpu/shaders/*.wgsl`   |
 
 When modifying pipeline logic:
 
@@ -47,9 +47,11 @@ When modifying pipeline logic:
 
 ## Key Files
 
-- `crates/invers-core/src/pipeline/` - CPU processing pipeline
-- `crates/invers-core/src/gpu/` - GPU acceleration (wgpu)
-- `crates/invers-core/src/models/` - Data structures (FilmPreset, ConvertOptions, etc.)
-- `crates/invers-core/src/auto_adjust/` - Auto-levels, color, exposure, white balance
+- `crates/invers-core/src/pipeline/` - CPU processing pipeline (base_estimation/, inversion/, tone_mapping/)
+- `crates/invers-core/src/gpu/` - GPU acceleration (context/, pipeline/, shaders/)
+- `crates/invers-core/src/models/` - Data structures (cb/, convert_options/, scan_profile/)
+- `crates/invers-core/src/auto_adjust/` - Auto-adjustments (levels/, white_balance/, color.rs, exposure.rs)
+- `crates/invers-core/src/decoders/` - Image decoders (tiff.rs, png.rs, raw.rs)
+- `crates/invers-core/src/color/` - Color space conversions (hsl.rs, lab.rs)
 - `crates/invers-cli/src/commands/` - CLI command implementations
 - `config/pipeline_defaults.yml` - Default pipeline configuration

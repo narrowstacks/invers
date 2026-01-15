@@ -12,7 +12,7 @@
 //! - `diagnose`: Compare conversion against third-party software
 //! - `test-params`: Optimize parameters against a reference
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use std::io;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use std::path::PathBuf;
 mod commands;
 
 use commands::{cmd_analyze, cmd_batch, cmd_convert, cmd_init};
+use invers_cli::args::{DebugArgs, PipelineArgs};
 use invers_cli::WhiteBalance;
 
 #[cfg(debug_assertions)]
@@ -38,128 +39,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
-}
-
-// =============================================================================
-// Shared argument structs to eliminate duplication between Convert and Batch
-// =============================================================================
-
-/// Common pipeline arguments shared between Convert and Batch commands
-/// These are advanced/research options hidden from default help output
-#[derive(Args, Clone, Debug)]
-pub struct PipelineArgs {
-    /// Pipeline mode: "legacy" (default), "research", or "cb"
-    /// Research pipeline uses density balance BEFORE inversion for better color accuracy
-    /// CB pipeline uses curve-based processing for film-like rendering
-    #[arg(long, value_name = "MODE", default_value = "legacy", hide = true)]
-    pub pipeline: String,
-
-    /// [RESEARCH] Density balance red exponent (R^db_r)
-    /// Typical range: 0.8-1.3, default 1.05
-    #[arg(long, value_name = "FLOAT", hide = true)]
-    pub db_red: Option<f32>,
-
-    /// [RESEARCH] Density balance blue exponent (B^db_b)
-    /// Typical range: 0.7-1.1, default 0.90
-    #[arg(long, value_name = "FLOAT", hide = true)]
-    pub db_blue: Option<f32>,
-
-    /// [RESEARCH] Neutral point ROI for auto-calculating density balance (x,y,width,height)
-    /// Sample a known gray area to auto-compute density balance
-    #[arg(long, value_name = "X,Y,W,H", hide = true)]
-    pub neutral_roi: Option<String>,
-
-    /// [CB] Tone profile preset (standard, logarithmic, log-rich, log-flat, linear,
-    /// linear-gamma, linear-flat, linear-deep, all-soft, all-hard, highlight-hard,
-    /// highlight-soft, shadow-hard, shadow-soft, auto)
-    #[arg(long, value_name = "PROFILE", hide = true)]
-    pub cb_tone: Option<String>,
-
-    /// [CB] Enhanced profile/LUT (none, natural, frontier, crystal, pakon)
-    #[arg(long, value_name = "PROFILE", hide = true)]
-    pub cb_lut: Option<String>,
-
-    /// [CB] Color model (none, basic, frontier, noritsu, bw)
-    #[arg(long, value_name = "MODEL", hide = true)]
-    pub cb_color: Option<String>,
-
-    /// [CB] Film character (none, generic, kodak, fuji, cinestill-50d, cinestill-800t)
-    #[arg(long, value_name = "CHARACTER", hide = true)]
-    pub cb_film: Option<String>,
-
-    /// [CB] White balance preset (none, auto, neutral, warm, cool, mix, standard, kodak, fuji, cine-t, cine-d)
-    #[arg(long, value_name = "PRESET", hide = true)]
-    pub cb_wb: Option<String>,
-}
-
-/// Debug-only arguments (only available in debug builds)
-/// These flags are hidden from default help output
-#[cfg(debug_assertions)]
-#[derive(Args, Clone, Debug, Default)]
-pub struct DebugArgs {
-    /// [DEBUG] Skip tone curve application
-    #[arg(long, hide = true)]
-    pub no_tonecurve: bool,
-
-    /// [DEBUG] Skip color matrix correction
-    #[arg(long, hide = true)]
-    pub no_colormatrix: bool,
-
-    /// [DEBUG] Inversion mode override: "mask-aware", "linear", "log", "divide-blend", or "bw"
-    #[arg(long, value_name = "MODE", hide = true)]
-    pub inversion: Option<String>,
-
-    /// [DEBUG] Enable automatic white balance correction
-    #[arg(long, hide = true)]
-    pub auto_wb: bool,
-
-    /// [DEBUG] Strength of auto white balance correction (0.0-1.0)
-    #[arg(long, value_name = "FLOAT", default_value = "1.0", hide = true)]
-    pub auto_wb_strength: f32,
-
-    /// [DEBUG] Auto white balance mode: "gray", "avg", or "pct" (percentile-based)
-    /// "pct" uses 98th percentile (robust white patch) - robust for varied scenes
-    #[arg(long, value_name = "MODE", default_value = "gray", hide = true)]
-    pub auto_wb_mode: String,
-
-    /// [DEBUG] Tone curve type: "neutral", "log", "cinematic", "linear", "asymmetric"
-    /// "log"/"cinematic" provides cinematic log-style tone profile
-    #[arg(long, value_name = "TYPE", hide = true)]
-    pub tone_curve: Option<String>,
-
-    /// [DEBUG] Enable debug output (detailed pipeline parameters)
-    #[arg(long, hide = true)]
-    pub debug: bool,
-}
-
-/// Placeholder for release builds - provides default values
-#[cfg(not(debug_assertions))]
-#[derive(Clone, Debug, Default)]
-pub struct DebugArgs {
-    pub no_tonecurve: bool,
-    pub no_colormatrix: bool,
-    pub inversion: Option<String>,
-    pub auto_wb: bool,
-    pub auto_wb_strength: f32,
-    pub auto_wb_mode: String,
-    pub tone_curve: Option<String>,
-    pub debug: bool,
-}
-
-#[cfg(not(debug_assertions))]
-impl DebugArgs {
-    pub fn release_defaults() -> Self {
-        Self {
-            no_tonecurve: false,
-            no_colormatrix: false,
-            inversion: None,
-            auto_wb: true,
-            auto_wb_strength: 1.0,
-            auto_wb_mode: "avg".to_string(),
-            tone_curve: None,
-            debug: false,
-        }
-    }
 }
 
 #[derive(Subcommand)]
