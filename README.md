@@ -20,6 +20,7 @@ A professional-grade film negative to positive conversion tool written in Rust. 
 Invers follows a modular Rust workspace architecture designed for maintainability and extensibility:
 
 - **invers-core**: Core library with modular subsystems
+
   - `pipeline/` - Processing stages (base estimation, inversion, tone mapping)
   - `auto_adjust/` - Auto-correction algorithms (levels, color, exposure, white balance)
   - `cb_pipeline/` - Curves-based processing pipeline inspired by Negative Lab Pro
@@ -28,6 +29,7 @@ Invers follows a modular Rust workspace architecture designed for maintainabilit
   - `gpu/` - Optional GPU acceleration via WGPU (feature-gated)
 
 - **invers-cli**: Command-line interface with modular command structure
+
   - Each command (`convert`, `batch`, `analyze`, `preset`, `init`) in its own module
   - Debug commands available in debug builds
 
@@ -68,7 +70,7 @@ git clone https://github.com/narrowstacks/invers.git
 cd invers
 
 # Build release version (recommended)
-cargo build --release
+cargo build --release --features gpu
 
 # The binary will be at ./target/release/invers
 ```
@@ -97,50 +99,52 @@ cargo clippy
 # Convert a single negative with automatic settings
 invers convert negative.tif
 
-# Convert with a specific film preset
-invers convert negative.tif --preset profiles/film/generic-color-negative.yml
+# Convert with warm white balance
+invers convert negative.tif --white-balance warm
 
-# Specify output location
-invers convert negative.tif --out ./converted/
+# Specify output location and format
+invers convert negative.tif --out ./converted/ --export tiff16
 ```
 
 ### Analyze Film Base
 
 ```bash
-# Auto-detect film base
-invers analyze-base negative.tif
+# Auto-detect film base color
+invers analyze negative.tif
 
 # Analyze specific region (x,y,width,height)
-invers analyze-base negative.tif --roi 100,100,500,500
+invers analyze negative.tif --roi 100,100,500,500
 
-# Save base estimation for reuse
-invers analyze-base negative.tif --save base.yml
+# Save base estimation for reuse across a roll
+invers analyze negative.tif --save base.json
 ```
 
 ### Batch Processing
 
 ```bash
-# Process multiple files
+# Process multiple files (shares base estimation from first image)
 invers batch *.tif --out ./converted/
 
-# Batch with preset and parallel threads
+# Batch with parallel threads and shared base
 invers batch *.tif \
-  --preset profiles/film/fuji-superia-400.yml \
   --threads 8 \
   --out ./converted/
+
+# Use pre-analyzed base for consistent results across a roll
+invers batch *.tif --base-from base.json --out ./converted/
+
+# Process each image independently (different rolls mixed together)
+invers batch *.tif --per-image --out ./converted/
 ```
 
-### Managing Presets
+### Initialize Config
 
 ```bash
-# List available presets
-invers preset list --dir profiles/film
+# Set up user config directory with default presets
+invers init
 
-# Show preset details
-invers preset show generic-color-negative
-
-# Create new preset template
-invers preset create my-film --dir ./presets/
+# Generate shell completions
+invers completions zsh > ~/.zfunc/_invers
 ```
 
 ## CLI Reference
@@ -153,82 +157,115 @@ invers convert [OPTIONS] <INPUT>
 Arguments:
   <INPUT>  Input file or directory
 
+Output Options:
+  -o, --out <PATH>          Output directory or file path
+      --export <FORMAT>     Export format: tiff16 (default) or dng
+
+Processing Options:
+  -w, --white-balance <PRESET>  White balance preset [default: auto]
+                                Values: auto, none, neutral, warm, cool
+      --exposure <FLOAT>        Exposure compensation (1.0 = no change, >1.0 = brighter)
+      --base <R,G,B>            Manual base RGB values (use 'invers analyze' to find these)
+      --bw                      Force black and white conversion mode
+
+General Options:
+      --silent              Suppress non-essential output (timing, progress)
+      --cpu                 Force CPU-only processing (GPU used by default)
+  -v, --verbose             Enable verbose output (config loading, processing details)
+  -h, --help                Print help
+```
+
+### `analyze` - Analyze Film Base
+
+Analyze an image to estimate film base color. Use this to find base RGB values
+that can be reused across multiple frames from the same roll.
+
+```text
+invers analyze [OPTIONS] <INPUT>
+
+Arguments:
+  <INPUT>  Input file to analyze
+
 Options:
-  -o, --out <DIR>                 Output directory
-  -p, --preset <FILE>             Film preset file
-  -s, --scan-profile <FILE>       Scan profile file
       --roi <X,Y,W,H>             ROI for base estimation (x,y,width,height)
-      --base-method <METHOD>      Base estimation method: "regions" (default) or "border"
-      --border-percent <PERCENT>  Border percentage for "border" method (1-25%)
-      --export <FORMAT>           Export format: tiff16 (default) or dng
-      --colorspace <COLORSPACE>   Working colorspace [default: linear-rec2020]
-  -j, --threads <N>               Number of parallel threads
-      --inversion <MODE>          Inversion mode (see below)
-      --base <R,G,B>              Manual base RGB values (overrides auto-detection)
-      --exposure <FLOAT>          Exposure compensation (1.0 = no change)
-      --no-tonecurve              Skip tone curve application
-      --no-colormatrix            Skip color matrix correction
-      --no-auto-levels            Skip auto-levels (histogram stretching)
-      --preserve-headroom         Keep output in 0.005-0.98 range
-      --no-clip                   Disable all clipping operations
-      --auto-wb                   Apply auto white balance correction
-      --debug                     Enable debug output
-      --silent                    Suppress non-essential output
-  -v, --verbose                   Enable verbose output
+      --base-method <METHOD>      Base estimation method [default: regions]
+                                  Values: regions, border
+      --border-percent <PERCENT>  Border percentage for "border" method [default: 5.0]
+      --json                      Output as JSON (machine-readable)
+  -s, --save <FILE>               Save analysis to file (JSON format)
+  -v, --verbose                   Show detailed analysis output
   -h, --help                      Print help
 ```
 
-#### Inversion Modes
-
-| Mode           | Description                                                                                                                                                                 |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mask-aware`   | **(Default)** Orange mask-aware inversion for color negative film. Properly accounts for the orange mask by applying per-channel shadow correction, eliminating blue casts. |
-| `linear`       | Simple `(base - negative) / base` inversion                                                                                                                                 |
-| `log`          | Density-based logarithmic inversion: `10^(log₁₀(base) - log₁₀(negative))`                                                                                                   |
-| `divide-blend` | Photoshop-style divide blend mode with gamma correction                                                                                                                     |
-
-### `analyze-base` - Analyze Film Base
-
-```text
-invers analyze-base [OPTIONS] <INPUT>
-
-Arguments:
-  <INPUT>  Input negative image file
-
-Options:
-      --roi <X,Y,W,H>    ROI for base estimation (x,y,width,height)
-      --save <FILE>      Save estimation to YAML file
-  -h, --help             Print help
-```
-
 ### `batch` - Batch Process Files
+
+Process multiple files with shared settings. By default, assumes all images are
+from the same roll and shares base estimation from the first image.
 
 ```text
 invers batch [OPTIONS] [INPUTS]...
 
 Arguments:
-  [INPUTS]...  Input files or pattern
+  [INPUTS]...  Input files or directories
 
-Options:
-      --base-from <FILE>  Base estimation file to use for all images
-  -p, --preset <FILE>     Film preset file
-      --export <FORMAT>   Export format: tiff16 (default) or dng
-  -o, --out <DIR>         Output directory
-  -j, --threads <N>       Number of parallel threads
-      --silent            Suppress non-essential output
-  -v, --verbose           Enable verbose output
-  -h, --help              Print help
+Base Estimation:
+      --base-from <FILE>    Base estimation file (JSON from 'analyze --save')
+      --base <R,G,B>        Manual base RGB values
+      --per-image           Estimate base per-image instead of sharing from first
+
+Output Options:
+      --export <FORMAT>     Export format: tiff16 (default) or dng
+  -o, --out <DIR>           Output directory
+
+Processing Options:
+  -w, --white-balance <PRESET>  White balance preset [default: auto]
+      --exposure <FLOAT>        Exposure compensation (1.0 = no change)
+      --bw                      Force black and white conversion mode
+
+General Options:
+  -r, --recursive           Recursively search directories for images
+  -j, --threads <N>         Number of parallel threads
+      --silent              Suppress non-essential output
+  -v, --verbose             Enable verbose output
+      --cpu                 Force CPU-only processing
+      --dry-run             List files that would be processed without processing
+  -h, --help                Print help
 ```
 
-### `preset` - Manage Presets
+### `init` - Initialize Configuration
+
+Set up user configuration directory with default presets. Safe to run multiple
+times - won't overwrite existing files unless --force is used.
 
 ```text
-invers preset <COMMAND>
+invers init [OPTIONS]
 
-Commands:
-  list    List available presets
-  show    Display preset details
-  create  Create new preset template
+Options:
+      --force    Force overwrite of existing files
+  -h, --help     Print help
+```
+
+### `completions` - Generate Shell Completions
+
+Generate shell completions for your shell of choice.
+
+```text
+invers completions <SHELL>
+
+Arguments:
+  <SHELL>  Shell to generate completions for
+           Values: bash, zsh, fish, powershell
+
+Examples:
+  bash: invers completions bash > ~/.bash_completion.d/invers
+  zsh:  invers completions zsh > ~/.zfunc/_invers
+  fish: invers completions fish > ~/.config/fish/completions/invers.fish
+```
+
+### Global Options
+
+```text
+      --config-path    Show the path to the config file being used and exit
 ```
 
 ## Processing Pipeline
